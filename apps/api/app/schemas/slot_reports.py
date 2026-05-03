@@ -767,6 +767,34 @@ def _utc_datetime(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+class PublicEstimateSnapshot(PublicEstimateSnapshotCreate):
+    estimateId: ContractId
+    freshnessLabel: PublicEstimateFreshness
+    quarantineReason: PublicEstimateParserStatus | None = None
+    status: PublicEstimateSnapshotStatus
+    storedAt: datetime
+
+
+class PublicEstimateSnapshotCreateResponse(ContractModel):
+    snapshot: PublicEstimateSnapshot
+
+
+class PublicEstimateFixtureImportResponse(ContractModel):
+    adapterMode: PublicEstimateAdapterMode
+    allowlistStatus: PublicEstimateAllowlistStatus
+    liveFetchAttempted: Literal[False]
+    parserDriftDetected: bool
+    quarantineByDefault: Literal[True]
+    sourceId: PublicEstimateSourceId
+    slotAlertTriggerAttempted: Literal[False]
+    snapshot: PublicEstimateSnapshot
+
+
+class PublicEstimateLatestResponse(ContractModel):
+    estimates: list[PublicEstimateSnapshot] = Field(max_length=100)
+    quarantinedCount: int = Field(ge=0)
+
+
 class PublicContextSummary(ContractModel):
     acceptedEstimateCount: int = Field(ge=0)
     alertTriggerAllowed: Literal[False]
@@ -826,6 +854,23 @@ class SourcePolicyResponse(ContractModel):
     credentialAccessAllowed: Literal[False]
     livePortalAutomationAllowed: Literal[False]
     records: list[SourcePolicyRecord] = Field(min_length=1, max_length=12)
+
+
+class SlotSignalExportResponse(ContractModel):
+    appointmentChangingActionTaken: Literal[False]
+    containsSensitiveRawData: Literal[False]
+    contributorIdentities: list[ContributorIdentityRecord] = Field(default_factory=list, max_length=1000)
+    contributorIdentityAuditEvents: list[ContributorIdentityAuditEvent] = Field(default_factory=list, max_length=1000)
+    contributorModerationNotes: list[ContributorModerationNote] = Field(default_factory=list, max_length=1000)
+    deliveryAuditEvents: list[AlertDeliveryAuditEvent] = Field(max_length=1000)
+    exportedAt: datetime
+    livePortalRequestMade: Literal[False]
+    pendingMatches: list[AlertMatch] = Field(max_length=1000)
+    publicEstimates: list[PublicEstimateSnapshot] = Field(default_factory=list, max_length=1000)
+    reports: list[SlotReport] = Field(max_length=1000)
+    safeSummary: SafeText
+    schemaVersion: int
+    subscriptions: list[AlertSubscription] = Field(max_length=1000)
 
 
 class SlotSignalDeleteResponse(ContractModel):
