@@ -287,3 +287,67 @@ class AlertDeliveryHistoryResponse(ContractModel):
     countsByStatus: dict[AlertDeliveryStatus, int]
 
 
+class ContributorConflictQuorum(ContractModel):
+    currentIndependentContributors: int = Field(ge=0)
+    met: bool
+    requiredIndependentContributors: int = Field(default=2, ge=2)
+
+
+class ContributorAbuseAuditEvent(ContractModel):
+    action: ContributorAbuseAuditAction
+    containsSensitiveRawData: Literal[False]
+    contributorId: str = Field(min_length=8, max_length=120)
+    limitMaxReports: int = Field(ge=1)
+    limitWindowHours: int = Field(ge=1)
+    reason: ContributorAbuseAuditReason
+    recentReportCount: int = Field(ge=0)
+    recordedAt: datetime
+
+
+class ContributorAbuseAuditResponse(ContractModel):
+    auditEvents: list[ContributorAbuseAuditEvent] = Field(max_length=500)
+    containsSensitiveRawData: Literal[False]
+
+
+class ContributorModerationNoteCreate(ContractModel):
+    containsSensitiveRawData: Literal[False]
+    note: str = Field(min_length=4, max_length=320)
+    reason: ContributorModerationReason
+    reviewStatus: ContributorLocalReviewStatus
+
+    @field_validator("note")
+    @classmethod
+    def reject_sensitive_note(cls, value: str) -> str:
+        if _SENSITIVE_NOTE_PATTERN.search(value):
+            raise ValueError("moderation note must not include credentials, tokens, MFA, raw page data, or screenshots")
+        if _EMAIL_PATTERN.search(value) or _PHONE_PATTERN.search(value):
+            raise ValueError("moderation note must not include personal contact data")
+        return value
+
+
+class ContributorModerationNote(ContributorModerationNoteCreate):
+    contributorId: str = Field(min_length=8, max_length=120)
+    noteId: ContractId
+    recordedAt: datetime
+
+
+class ContributorModerationNoteCreateResponse(ContractModel):
+    containsSensitiveRawData: Literal[False]
+    note: ContributorModerationNote
+
+
+class ContributorModerationNotesResponse(ContractModel):
+    containsSensitiveRawData: Literal[False]
+    notes: list[ContributorModerationNote] = Field(max_length=500)
+
+
+class ContributorIdentityAuditEvent(ContractModel):
+    action: ContributorIdentityAuditAction
+    containsSensitiveRawData: Literal[False]
+    contributorId: str = Field(min_length=8, max_length=120)
+    contributorKeyId: ContractId
+    previousContributorKeyId: ContractId | None = None
+    recordedAt: datetime
+    rotationCount: int = Field(ge=0, le=100)
+
+
