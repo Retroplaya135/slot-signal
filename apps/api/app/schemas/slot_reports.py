@@ -355,6 +355,94 @@ class NotificationAdapterSandboxHistoryResponse(ContractModel):
     slotAlertsDelivered: Literal[False]
 
 
+class ProviderDeliveryReadinessResponse(ContractModel):
+    blockedReasons: list[ProviderDeliveryBlockedReason] = Field(min_length=1, max_length=8)
+    checkedAt: datetime
+    containsSensitiveRawData: Literal[False]
+    credentialStorageMode: Literal["not_configured"]
+    deliveryBoundary: Literal["browser_digest_primary_provider_outbox_disabled"]
+    externalNetworkCallAttempted: Literal[False]
+    externalProviderDeliveryEnabled: Literal[False]
+    liveProviderConfigured: Literal[False]
+    nextRequiredProof: Literal["delivery_readiness_provider_configuration_not_implemented"]
+    providerChannels: list[ProviderDeliveryChannel] = Field(min_length=3, max_length=3)
+    providerSafeOutboxEnabled: Literal[True]
+    safeDefaultDeliveryModes: list[Literal["browser", "digest"]] = Field(min_length=2, max_length=2)
+
+
+class ProviderOutboxCreate(ContractModel):
+    adapterMode: Literal["provider_safe_outbox"]
+    channels: list[ProviderDeliveryChannel] = Field(min_length=1, max_length=3)
+    containsSensitiveRawData: Literal[False]
+    externalDeliveryEnabled: Literal[False]
+    includeDigest: bool = False
+    notificationIds: list[ContractId] | None = Field(default=None, max_length=100)
+    recordedAt: datetime | None = None
+
+    @field_validator("channels")
+    @classmethod
+    def normalize_channels(cls, value: list[ProviderDeliveryChannel]) -> list[ProviderDeliveryChannel]:
+        return list(dict.fromkeys(value))
+
+
+class ProviderOutboxPayload(ContractModel):
+    actionLabel: Literal["Open tracker"]
+    adapterMode: Literal["provider_safe_outbox"]
+    availabilityClaim: Literal["community_report_not_official_confirmation"]
+    body: SafeText
+    channel: ProviderDeliveryChannel
+    containsBookingConfirmation: Literal[False]
+    containsSensitiveRawData: Literal[False]
+    country: SafeText
+    externalNetworkCallAttempted: Literal[False]
+    matchedDates: list[date] = Field(min_length=1, max_length=60)
+    postCity: SafeText
+    providerEndpoint: Literal["disabled_by_default"]
+    recipientRef: ContractId
+    redactionLevel: Literal["no_secrets"]
+    retryBackoffSeconds: int = Field(ge=60, le=3600)
+    title: Literal["Community visa slot report"]
+    unsubscribeAction: Literal["pause_or_delete_filter"]
+    visaClass: SafeText
+
+
+class ProviderOutboxDelivery(ContractModel):
+    channel: ProviderDeliveryChannel
+    containsSensitiveRawData: Literal[False]
+    externalDeliveryEnabled: Literal[False]
+    externalNetworkCallAttempted: Literal[False]
+    liveProviderConfigured: Literal[False]
+    notificationId: ContractId
+    outboxDeliveryId: ContractId
+    payload: ProviderOutboxPayload | None
+    reason: ProviderOutboxReason
+    recordedAt: datetime
+    reportId: ContractId
+    status: ProviderOutboxStatus
+    subscriptionId: ContractId
+
+
+class ProviderOutboxResponse(ContractModel):
+    adapterMode: Literal["provider_safe_outbox"]
+    containsSensitiveRawData: Literal[False]
+    countsByStatus: dict[ProviderOutboxStatus, int]
+    deliveries: list[ProviderOutboxDelivery] = Field(max_length=200)
+    externalDeliveryEnabled: Literal[False]
+    externalNetworkCallAttempted: Literal[False]
+    liveProviderConfigured: Literal[False]
+    slotAlertsDelivered: Literal[False]
+
+
+class ProviderOutboxHistoryResponse(ContractModel):
+    containsSensitiveRawData: Literal[False]
+    countsByStatus: dict[ProviderOutboxStatus, int]
+    deliveries: list[ProviderOutboxDelivery] = Field(max_length=200)
+    externalDeliveryEnabled: Literal[False]
+    externalNetworkCallAttempted: Literal[False]
+    liveProviderConfigured: Literal[False]
+    slotAlertsDelivered: Literal[False]
+
+
 class ContributorConflictQuorum(ContractModel):
     currentIndependentContributors: int = Field(ge=0)
     met: bool
@@ -450,5 +538,42 @@ class ContributorTrustSummary(ContractModel):
 
 class ContributorTrustResponse(ContractModel):
     trust: ContributorTrustSummary
+
+
+class PublicContextSummary(ContractModel):
+    acceptedEstimateCount: int = Field(ge=0)
+    alertTriggerAllowed: Literal[False]
+    availabilityClaim: Literal["public_context_not_slot_availability"]
+    contextId: ContractId
+    country: SafeText
+    freshUntil: datetime
+    freshnessLabel: PublicContextFreshness
+    latestCapturedAt: datetime
+    latestEstimateLabel: SafeText
+    latestEstimateValueDays: int = Field(ge=0, le=3650)
+    parserStatuses: list[PublicEstimateParserStatus] = Field(max_length=8)
+    postCity: SafeText
+    quarantinedEstimateCount: int = Field(ge=0)
+    recommendedUse: Literal["decision_context_only"]
+    reviewNote: Literal["public_context_not_appointment_inventory"]
+    slotAlertTriggerAttempted: Literal[False]
+    sourceKind: PublicContextSourceKind
+    sourceNames: list[SafeText] = Field(max_length=16)
+    sourceUrls: list[str] = Field(max_length=16)
+    staleEstimateCount: int = Field(ge=0)
+    status: PublicContextStatus
+    totalEstimateCount: int = Field(ge=1)
+    triggersSlotAlerts: Literal[False]
+    visaClass: SafeText
+
+
+class PublicContextSummaryResponse(ContractModel):
+    containsSensitiveRawData: Literal[False]
+    contexts: list[PublicContextSummary] = Field(max_length=100)
+    liveFetchAttempted: Literal[False]
+    quarantinedContextCount: int = Field(ge=0)
+    slotAlertsDelivered: Literal[False]
+    slotAlertTriggerAttempted: Literal[False]
+    sourcePolicy: "SourcePolicyRecord"
 
 
