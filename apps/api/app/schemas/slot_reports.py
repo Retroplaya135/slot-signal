@@ -124,6 +124,70 @@ _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _PHONE_PATTERN = re.compile(r"(?:\+?\d[\s().-]?){8,}")
 
 
+class SlotReportCreate(ContractModel):
+    sourceKind: SlotReportSourceKind
+    country: SafeText
+    postCity: SafeText
+    visaClass: SafeText
+    availableDates: list[date] = Field(min_length=1, max_length=60)
+    capturedAt: datetime
+    confidence: SlotReportConfidence
+    notes: str | None = Field(default=None, max_length=320)
+    contributorId: str | None = Field(default=None, min_length=8, max_length=120)
+    containsSensitiveRawData: Literal[False]
+    credentialDataIncluded: Literal[False]
+    portalAutomationUsed: Literal[False]
+    bookingActionTaken: Literal[False]
+
+    @field_validator("availableDates")
+    @classmethod
+    def normalize_available_dates(cls, value: list[date]) -> list[date]:
+        unique_sorted = sorted(set(value))
+        if not unique_sorted:
+            raise ValueError("availableDates must include at least one date")
+        return unique_sorted
+
+    @field_validator("notes")
+    @classmethod
+    def reject_sensitive_notes(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if _SENSITIVE_NOTE_PATTERN.search(value):
+            raise ValueError("notes must not include credentials, tokens, MFA, raw page data, or screenshots")
+        if _EMAIL_PATTERN.search(value) or _PHONE_PATTERN.search(value):
+            raise ValueError("notes must not include personal contact data")
+        return value
+
+
+class SlotReportProvenance(ContractModel):
+    sourceKind: SlotReportSourceKind
+    confidence: SlotReportConfidence
+    country: SafeText
+    postCity: SafeText
+    visaClass: SafeText
+    capturedAt: datetime
+    submittedAt: datetime
+    contributorId: str | None = Field(default=None, min_length=8, max_length=120)
+    officialAvailabilitySource: Literal[False]
+    availabilityClaim: Literal["community_report_not_official_confirmation"]
+
+
+class SlotReportTrust(ContractModel):
+    status: SlotReportTrustStatus
+    dedupeKey: str = Field(min_length=8, max_length=240, pattern=r"^[A-Za-z0-9._:-]+$")
+    duplicateOfReportId: ContractId | None
+    conflictingReportIds: list[ContractId] = Field(max_length=24)
+    eligibleForNotification: bool
+    independentContributorCount: int = Field(default=0, ge=0, le=1000)
+    qualityScore: int = Field(default=70, ge=0, le=100)
+    qualitySignals: list[SlotReportQualitySignal] = Field(default_factory=list, max_length=16)
+    qualityTier: SlotReportQualityTier = "standard"
+    similarFreshReportCount: int = Field(default=0, ge=0, le=1000)
+    suppressionReasons: list[SlotReportSuppressionReason] = Field(default_factory=list, max_length=16)
+    visibleMetadataOnly: Literal[True]
+    provenance: SlotReportProvenance
+
+
 class AlertSubscriptionCreate(ContractModel):
     active: bool = True
     channels: list[NotificationChannel] = Field(min_length=1, max_length=4)
@@ -206,6 +270,35 @@ class AlertSubscriptionDeleteResponse(ContractModel):
     deleted: bool
     removedPendingMatches: int
     subscription: AlertSubscription
+
+
+class AlertMatch(ContractModel):
+    subscriptionId: ContractId
+    reportId: ContractId
+    matchedDates: list[date] = Field(min_length=1, max_length=60)
+    notificationReason: Literal["fresh_community_report_matches_filter"]
+    availabilityClaim: Literal["community_report_not_official_confirmation"]
+    deliveryMode: NotificationDeliveryMode = "immediate"
+    digestWindowMinutes: int = Field(default=60, ge=15, le=1440)
+    lastDeliveryAttemptAt: datetime | None = None
+    nextRetryAt: datetime | None = None
+    notificationEvent: NotificationEvent
+    reportTrust: SlotReportTrust
+    retryAttemptCount: int = Field(default=0, ge=0)
+
+
+class AlertMatchesResponse(ContractModel):
+    subscription: AlertSubscription
+    matches: list[AlertMatch] = Field(max_length=100)
+
+
+class AlertNotificationDigestGroup(ContractModel):
+    deliveryMode: Literal["digest"]
+    digestWindowMinutes: int = Field(ge=15, le=1440)
+    latestMatchedAt: datetime
+    matches: list[AlertMatch] = Field(max_length=100)
+    pendingCount: int = Field(ge=0)
+    subscriptionId: ContractId
 
 
 class AlertPendingCleanupRequest(ContractModel):
@@ -538,6 +631,41 @@ class ContributorTrustSummary(ContractModel):
 
 class ContributorTrustResponse(ContractModel):
     trust: ContributorTrustSummary
+
+
+class PublicEstimateFixtureImportRequest(ContractModel):
+    adapterMode: PublicEstimateAdapterMode
+    capturedAt: datetime | None = None
+    containsSensitiveRawData: Literal[False]
+    country: SafeText
+    estimateLabel: SafeText
+    fixtureText: str = Field(min_length=1, max_length=4000)
+    freshUntil: datetime | None = None
+    parserVersion: str = Field(min_length=1, max_length=80)
+    postCity: SafeText
+    quarantineByDefault: Literal[True]
+    sourceId: PublicEstimateSourceId
+    sourceName: SafeText
+    sourcePermission: Literal["public_estimate_context"]
+    sourceUrl: str = Field(min_length=12, max_length=500)
+    triggersSlotAlerts: Literal[False]
+    visaClass: SafeText
+
+    @field_validator("fixtureText")
+    @classmethod
+    def reject_sensitive_fixture_text(cls, value: str) -> str:
+        if _SENSITIVE_NOTE_PATTERN.search(value):
+            raise ValueError("fixtureText must not include credentials, tokens, MFA, raw page data, or screenshots")
+        if _EMAIL_PATTERN.search(value) or _PHONE_PATTERN.search(value):
+            raise ValueError("fixtureText must not include personal contact data")
+        return value
+
+    @field_validator("sourceUrl")
+    @classmethod
+    def require_http_fixture_source_url(cls, value: str) -> str:
+        if not value.startswith(("https://", "http://")):
+            raise ValueError("sourceUrl must be an HTTP(S) URL")
+        return value
 
 
 class PublicContextSummary(ContractModel):
