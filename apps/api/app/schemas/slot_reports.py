@@ -287,10 +287,85 @@ class AlertDeliveryHistoryResponse(ContractModel):
     countsByStatus: dict[AlertDeliveryStatus, int]
 
 
+class NotificationAdapterSandboxCreate(ContractModel):
+    adapterMode: Literal["sandbox_only"]
+    channels: list[NotificationAdapterSandboxChannel] = Field(min_length=1, max_length=3)
+    containsSensitiveRawData: Literal[False]
+    includeDigest: bool = False
+    notificationIds: list[ContractId] | None = Field(default=None, max_length=100)
+    recordedAt: datetime | None = None
+
+    @field_validator("channels")
+    @classmethod
+    def normalize_channels(cls, value: list[NotificationAdapterSandboxChannel]) -> list[NotificationAdapterSandboxChannel]:
+        return list(dict.fromkeys(value))
+
+
+class NotificationAdapterSandboxPayload(ContractModel):
+    actionLabel: Literal["Open tracker"]
+    adapterMode: Literal["sandbox_only"]
+    availabilityClaim: Literal["community_report_not_official_confirmation"]
+    body: SafeText
+    channel: NotificationAdapterSandboxChannel
+    containsBookingConfirmation: Literal[False]
+    containsSensitiveRawData: Literal[False]
+    country: SafeText
+    externalNetworkCallAttempted: Literal[False]
+    matchedDates: list[date] = Field(min_length=1, max_length=60)
+    postCity: SafeText
+    providerEndpoint: Literal["not_called"]
+    recipientRef: ContractId
+    redactionLevel: Literal["no_secrets"]
+    title: Literal["Community visa slot report"]
+    unsubscribeAction: Literal["pause_or_delete_filter"]
+    visaClass: SafeText
+
+
+class NotificationAdapterSandboxDelivery(ContractModel):
+    channel: NotificationAdapterSandboxChannel
+    containsSensitiveRawData: Literal[False]
+    externalNetworkCallAttempted: Literal[False]
+    liveProviderConfigured: Literal[False]
+    notificationId: ContractId
+    payload: NotificationAdapterSandboxPayload | None
+    reason: NotificationAdapterSandboxReason
+    recordedAt: datetime
+    reportId: ContractId
+    sandboxDeliveryId: ContractId
+    status: NotificationAdapterSandboxStatus
+    subscriptionId: ContractId
+
+
+class NotificationAdapterSandboxResponse(ContractModel):
+    adapterMode: Literal["sandbox_only"]
+    containsSensitiveRawData: Literal[False]
+    countsByStatus: dict[NotificationAdapterSandboxStatus, int]
+    deliveries: list[NotificationAdapterSandboxDelivery] = Field(max_length=200)
+    externalNetworkCallAttempted: Literal[False]
+    liveProviderConfigured: Literal[False]
+    slotAlertsDelivered: Literal[False]
+
+
+class NotificationAdapterSandboxHistoryResponse(ContractModel):
+    containsSensitiveRawData: Literal[False]
+    countsByStatus: dict[NotificationAdapterSandboxStatus, int]
+    deliveries: list[NotificationAdapterSandboxDelivery] = Field(max_length=200)
+    externalNetworkCallAttempted: Literal[False]
+    liveProviderConfigured: Literal[False]
+    slotAlertsDelivered: Literal[False]
+
+
 class ContributorConflictQuorum(ContractModel):
     currentIndependentContributors: int = Field(ge=0)
     met: bool
     requiredIndependentContributors: int = Field(default=2, ge=2)
+
+
+class ContributorRateLimitPolicy(ContractModel):
+    currentWindowReports: int = Field(ge=0)
+    limited: bool
+    maxReports: int = Field(ge=1)
+    windowHours: int = Field(ge=1)
 
 
 class ContributorAbuseAuditEvent(ContractModel):
@@ -349,5 +424,31 @@ class ContributorIdentityAuditEvent(ContractModel):
     previousContributorKeyId: ContractId | None = None
     recordedAt: datetime
     rotationCount: int = Field(ge=0, le=100)
+
+
+class ContributorTrustSummary(ContractModel):
+    acceptedUniqueReports: int = Field(ge=0)
+    abuseAuditEventCount: int = Field(ge=0)
+    abuseReviewRequired: bool
+    conflictQuorumPolicy: ContributorConflictQuorum
+    conflictReports: int = Field(ge=0)
+    contributorId: str = Field(min_length=8, max_length=120)
+    duplicateReports: int = Field(ge=0)
+    identityHealth: ContributorIdentityHealth
+    identityRotationWarning: bool
+    localReviewStatus: ContributorLocalReviewStatus
+    localIdentitySeen: bool
+    moderationNoteCount: int = Field(ge=0)
+    notificationEligibleReports: int = Field(ge=0)
+    piiStored: Literal[False]
+    rateLimitPolicy: ContributorRateLimitPolicy
+    recentReportCount: int = Field(ge=0)
+    reputationStatus: ContributorReputationStatus
+    staleReports: int = Field(ge=0)
+    totalReports: int = Field(ge=0)
+
+
+class ContributorTrustResponse(ContractModel):
+    trust: ContributorTrustSummary
 
 
