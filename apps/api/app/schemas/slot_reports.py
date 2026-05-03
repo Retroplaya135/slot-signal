@@ -124,10 +124,103 @@ _EMAIL_PATTERN = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _PHONE_PATTERN = re.compile(r"(?:\+?\d[\s().-]?){8,}")
 
 
+class AlertSubscriptionCreate(ContractModel):
+    active: bool = True
+    channels: list[NotificationChannel] = Field(min_length=1, max_length=4)
+    cooldownMinutes: int = Field(default=15, ge=15, le=1440)
+    country: SafeText
+    deliveryMode: NotificationDeliveryMode = "immediate"
+    digestWindowMinutes: int = Field(default=60, ge=15, le=1440)
+    postCities: list[SafeText] = Field(min_length=1, max_length=24)
+    targetStartDate: date
+    targetEndDate: date
+    visaClasses: list[SafeText] = Field(min_length=1, max_length=24)
+
+    @field_validator("channels")
+    @classmethod
+    def normalize_channels(cls, value: list[NotificationChannel]) -> list[NotificationChannel]:
+        return list(dict.fromkeys(value))
+
+    @field_validator("postCities", "visaClasses")
+    @classmethod
+    def normalize_unique_values(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(value))
+
+    @model_validator(mode="after")
+    def validate_date_window(self) -> "AlertSubscriptionCreate":
+        if self.targetStartDate > self.targetEndDate:
+            raise ValueError("targetStartDate must be on or before targetEndDate")
+        return self
+
+
+class AlertSubscription(AlertSubscriptionCreate):
+    subscriptionId: ContractId
+    createdAt: datetime
+    deletedAt: datetime | None = None
+    lastNotificationAt: datetime | None = None
+    pausedAt: datetime | None = None
+    status: AlertSubscriptionStatus = "active"
+    updatedAt: datetime | None = None
+
+
+class AlertSubscriptionUpdate(ContractModel):
+    active: bool | None = None
+    auditReason: str | None = Field(default=None, max_length=160)
+    containsSensitiveRawData: Literal[False]
+    cooldownMinutes: int | None = Field(default=None, ge=15, le=1440)
+    deliveryMode: NotificationDeliveryMode | None = None
+    digestWindowMinutes: int | None = Field(default=None, ge=15, le=1440)
+
+    @field_validator("auditReason")
+    @classmethod
+    def reject_sensitive_audit_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if _SENSITIVE_NOTE_PATTERN.search(value):
+            raise ValueError("auditReason must not include credentials, tokens, MFA, raw page data, or screenshots")
+        if _EMAIL_PATTERN.search(value) or _PHONE_PATTERN.search(value):
+            raise ValueError("auditReason must not include personal contact data")
+        return value
+
+
+class AlertSubscriptionAuditEvent(ContractModel):
+    action: AlertSubscriptionAuditAction
+    auditReason: str | None = Field(default=None, max_length=160)
+    containsSensitiveRawData: Literal[False]
+    recordedAt: datetime
+    subscriptionId: ContractId
+
+
+class AlertSubscriptionListResponse(ContractModel):
+    auditEvents: list[AlertSubscriptionAuditEvent] = Field(max_length=500)
+    subscriptions: list[AlertSubscription] = Field(max_length=500)
+
+
+class AlertSubscriptionUpdateResponse(ContractModel):
+    auditEvent: AlertSubscriptionAuditEvent
+    subscription: AlertSubscription
+
+
+class AlertSubscriptionDeleteResponse(ContractModel):
+    auditEvent: AlertSubscriptionAuditEvent
+    deleted: bool
+    removedPendingMatches: int
+    subscription: AlertSubscription
+
+
 class AlertPendingCleanupRequest(ContractModel):
     checkedAt: datetime | None = None
     cutoffBefore: datetime | None = None
     dryRun: bool = True
+
+
+class AlertPendingCleanupResponse(ContractModel):
+    checkedAt: datetime
+    cleanupReason: Literal["stale_pending_cleanup"]
+    containsSensitiveRawData: Literal[False]
+    deletedPendingMatches: int = Field(ge=0)
+    dryRun: bool
+    matchedPendingMatches: int = Field(ge=0)
 
 
 class AlertDeliveryAckCreate(ContractModel):
