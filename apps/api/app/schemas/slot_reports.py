@@ -629,6 +629,30 @@ class ContributorModerationNotesResponse(ContractModel):
     notes: list[ContributorModerationNote] = Field(max_length=500)
 
 
+class ContributorIdentityUpsert(ContractModel):
+    containsSensitiveRawData: Literal[False]
+    contributorKeyId: ContractId
+    createdAt: datetime
+    lastSeenAt: datetime | None = None
+    piiStored: Literal[False]
+    proofKind: ContributorIdentityProofKind
+    rotationCount: int = Field(ge=0, le=100)
+    storageScope: ContributorIdentityStorageScope
+
+    @model_validator(mode="after")
+    def validate_seen_after_created(self) -> "ContributorIdentityUpsert":
+        if self.lastSeenAt and _utc_datetime(self.lastSeenAt) < _utc_datetime(self.createdAt):
+            raise ValueError("lastSeenAt must be on or after createdAt")
+        return self
+
+
+class ContributorIdentityRecord(ContributorIdentityUpsert):
+    contributorId: str = Field(min_length=8, max_length=120)
+    firstSeenAt: datetime
+    identityHealth: ContributorIdentityHealth
+    rotationWarning: bool
+
+
 class ContributorIdentityAuditEvent(ContractModel):
     action: ContributorIdentityAuditAction
     containsSensitiveRawData: Literal[False]
@@ -637,6 +661,12 @@ class ContributorIdentityAuditEvent(ContractModel):
     previousContributorKeyId: ContractId | None = None
     recordedAt: datetime
     rotationCount: int = Field(ge=0, le=100)
+
+
+class ContributorIdentityResponse(ContractModel):
+    auditEvents: list[ContributorIdentityAuditEvent] = Field(max_length=500)
+    containsSensitiveRawData: Literal[False]
+    identity: ContributorIdentityRecord
 
 
 class ContributorTrustSummary(ContractModel):
@@ -663,6 +693,37 @@ class ContributorTrustSummary(ContractModel):
 
 class ContributorTrustResponse(ContractModel):
     trust: ContributorTrustSummary
+
+
+class PublicEstimateSnapshotCreate(ContractModel):
+    availabilityClaim: Literal["public_estimate_not_slot_availability"]
+    capturedAt: datetime
+    containsSensitiveRawData: Literal[False]
+    country: SafeText
+    estimateLabel: SafeText
+    estimateValueDays: int = Field(ge=0, le=3650)
+    freshUntil: datetime
+    parserStatus: PublicEstimateParserStatus
+    parserVersion: str = Field(min_length=1, max_length=80)
+    postCity: SafeText
+    sourceName: SafeText
+    sourcePermission: Literal["public_estimate_context"]
+    sourceUrl: str = Field(min_length=12, max_length=500)
+    triggersSlotAlerts: Literal[False]
+    visaClass: SafeText
+
+    @field_validator("sourceUrl")
+    @classmethod
+    def require_http_source_url(cls, value: str) -> str:
+        if not value.startswith(("https://", "http://")):
+            raise ValueError("sourceUrl must be an HTTP(S) URL")
+        return value
+
+    @model_validator(mode="after")
+    def validate_fresh_window(self) -> "PublicEstimateSnapshotCreate":
+        if _utc_datetime(self.freshUntil) < _utc_datetime(self.capturedAt):
+            raise ValueError("freshUntil must be on or after capturedAt")
+        return self
 
 
 class PublicEstimateFixtureImportRequest(ContractModel):
@@ -698,6 +759,12 @@ class PublicEstimateFixtureImportRequest(ContractModel):
         if not value.startswith(("https://", "http://")):
             raise ValueError("sourceUrl must be an HTTP(S) URL")
         return value
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 class PublicContextSummary(ContractModel):
@@ -737,6 +804,30 @@ class PublicContextSummaryResponse(ContractModel):
     sourcePolicy: "SourcePolicyRecord"
 
 
+class SourcePolicyRecord(ContractModel):
+    alertEligibility: SourcePolicyAlertEligibility
+    allowedInMvp: bool
+    appointmentChangingActionAllowed: Literal[False]
+    canTriggerSlotAlerts: bool
+    credentialAccessAllowed: Literal[False]
+    officialAvailabilitySource: Literal[False]
+    policyReason: SafeText
+    portalAutomationAllowed: Literal[False]
+    proofGate: SafeText
+    requiresWrittenAuthorization: bool
+    sourceKind: SourcePolicySourceKind
+    sourceLane: SourcePolicyLane
+
+
+class SourcePolicyResponse(ContractModel):
+    appointmentChangingActionAllowed: Literal[False]
+    checkedAt: datetime
+    containsSensitiveRawData: Literal[False]
+    credentialAccessAllowed: Literal[False]
+    livePortalAutomationAllowed: Literal[False]
+    records: list[SourcePolicyRecord] = Field(min_length=1, max_length=12)
+
+
 class SlotSignalDeleteResponse(ContractModel):
     containsSensitiveRawData: Literal[False]
     deleted: bool
@@ -752,3 +843,12 @@ class SlotSignalRetentionPruneRequest(ContractModel):
     dryRun: bool = True
 
 
+class SlotSignalRetentionPruneResponse(ContractModel):
+    containsSensitiveRawData: Literal[False]
+    cutoffBefore: datetime
+    deletedDeliveryAuditEvents: int
+    deletedPendingMatches: int
+    deletedReports: int
+    dryRun: bool
+    matchedReports: int
+    retentionAction: Literal["retention_prune"]
