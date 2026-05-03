@@ -188,6 +188,23 @@ class SlotReportTrust(ContractModel):
     provenance: SlotReportProvenance
 
 
+class SlotReport(SlotReportCreate):
+    reportId: ContractId
+    storedAt: datetime
+    freshUntil: datetime
+    freshness: SlotReportFreshness
+    availabilityClaim: Literal["community_report_not_official_confirmation"]
+    trust: SlotReportTrust
+
+
+class SlotReportLatestRow(SlotReport):
+    matchedDates: list[date] = Field(min_length=1, max_length=60)
+
+
+class SlotReportLatestResponse(ContractModel):
+    reports: list[SlotReportLatestRow] = Field(max_length=100)
+
+
 class AlertSubscriptionCreate(ContractModel):
     active: bool = True
     channels: list[NotificationChannel] = Field(min_length=1, max_length=4)
@@ -287,9 +304,18 @@ class AlertMatch(ContractModel):
     retryAttemptCount: int = Field(default=0, ge=0)
 
 
+class AlertSubscriptionCreateResponse(ContractModel):
+    subscription: AlertSubscription
+    initialMatches: list[AlertMatch] = Field(max_length=100)
+
+
 class AlertMatchesResponse(ContractModel):
     subscription: AlertSubscription
     matches: list[AlertMatch] = Field(max_length=100)
+
+
+class AlertNotificationQueueResponse(ContractModel):
+    pendingMatches: list[AlertMatch] = Field(max_length=100)
 
 
 class AlertNotificationDigestGroup(ContractModel):
@@ -299,6 +325,12 @@ class AlertNotificationDigestGroup(ContractModel):
     matches: list[AlertMatch] = Field(max_length=100)
     pendingCount: int = Field(ge=0)
     subscriptionId: ContractId
+
+
+class AlertNotificationDigestResponse(ContractModel):
+    containsSensitiveRawData: Literal[False]
+    groups: list[AlertNotificationDigestGroup] = Field(max_length=100)
+    slotAlertsDelivered: Literal[False]
 
 
 class AlertPendingCleanupRequest(ContractModel):
@@ -703,5 +735,20 @@ class PublicContextSummaryResponse(ContractModel):
     slotAlertsDelivered: Literal[False]
     slotAlertTriggerAttempted: Literal[False]
     sourcePolicy: "SourcePolicyRecord"
+
+
+class SlotSignalDeleteResponse(ContractModel):
+    containsSensitiveRawData: Literal[False]
+    deleted: bool
+    deletedDeliveryAuditEvents: int
+    deletedPendingMatches: int
+    deletedReports: int
+    reportId: ContractId
+    retentionAction: Literal["manual_delete"]
+
+
+class SlotSignalRetentionPruneRequest(ContractModel):
+    cutoffBefore: datetime | None = None
+    dryRun: bool = True
 
 
