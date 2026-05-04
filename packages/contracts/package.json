@@ -1,0 +1,24 @@
+{
+  "name": "@slot-signal/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "pretest": "npm run build",
+    "test": "node scripts/message-contract.test.mjs && node scripts/domain-contract.test.mjs && node scripts/queue-contract.test.mjs && node scripts/adapter-contract.test.mjs && node scripts/notification-contract.test.mjs && node scripts/workflow-contract.test.mjs && node scripts/observability-contract.test.mjs && node scripts/slot-report-contract.test.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
