@@ -1,0 +1,3 @@
+export const MIN_SAFE_CHECK_INTERVAL_MINUTES = 15;
+export const MESSAGE_VERSION = 1;
+export const QUEUE_RETENTION_LIMIT = 200;
