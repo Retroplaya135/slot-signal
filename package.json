@@ -1,0 +1,32 @@
+{
+  "name": "slot-signal",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20 <25"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild": "0.28.1",
+      "vite": "8.0.16"
+    }
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "api:test": "PYTHONPATH=apps/api python -m pytest apps/api/tests",
+    "build": "corepack pnpm -r --if-present build",
+    "build:extension:local": "corepack pnpm --filter @slot-signal/extension build",
+    "build:extension:store": "WXT_EXTENSION_PROFILE=store WXT_PUBLIC_API_ORIGIN=https://api.slot-signal.example corepack pnpm --filter @slot-signal/extension build && node scripts/check-store-build.mjs",
+    "site:build": "corepack pnpm --filter @slot-signal/public-site build",
+    "site:check": "node apps/public-site/scripts/check-links.mjs",
+    "test": "corepack pnpm --filter @slot-signal/contracts test && node tests/safety-contract.test.mjs",
+    "typecheck": "corepack pnpm -r --if-present typecheck",
+    "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm api:test && corepack pnpm build && corepack pnpm site:check"
+  }
+}
