@@ -235,3 +235,188 @@ class InMemoryEntitlementStore:
         return event
 
 
+class DurableEntitlementStore(InMemoryEntitlementStore):
+    def __init__(self, db_path: str) -> None:
+        super().__init__()
+        self._db_path = db_path if db_path == ":memory:" else str(Path(db_path).expanduser())
+        self._ensure_schema()
+        self._load_state()
+
+    def issue_access_code(self, payload: AccessCodeIssueRequest, now: datetime | None = None) -> AccessCodeEntitlementRecord:
+        audit_start = len(self._audit)
+        record = super().issue_access_code(payload, now)
+        self._persist_entitlement(record)
+        for event in self._audit[audit_start:]:
+            self._persist_audit(event)
+        return record
+
+    def update_access_code(
+        self,
+        entitlement_id: str,
+        payload: AccessCodeUpdateRequest,
+        now: datetime | None = None,
+    ) -> AccessCodeUpdateResponse | None:
+        audit_start = len(self._audit)
+        response = super().update_access_code(entitlement_id, payload, now)
+        if response is None:
+            return None
+        self._persist_entitlement(response.entitlement)
+        for event in self._audit[audit_start:]:
+            self._persist_audit(event)
+        return response
+
+    def verify_access_code(
+        self,
+        payload: AccessCodeVerifyRequest,
+        now: datetime | None = None,
+    ) -> AccessCodeVerifyResponse:
+        audit_start = len(self._audit)
+        response = super().verify_access_code(payload, now)
+        if response.entitlement is not None:
+            self._persist_entitlement(response.entitlement)
+        for event in self._audit[audit_start:]:
+            self._persist_audit(event)
+        return response
+
+    def health_check(self) -> dict[str, str]:
+        with self._connect() as connection:
+            count = connection.execute("select count(*) from access_code_entitlements").fetchone()[0]
+        return {"detail": f"durable entitlement store configured; schema={ENTITLEMENT_SCHEMA_VERSION}; records={count}", "status": "ok"}
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        connection = sqlite3.connect(self._db_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("pragma foreign_keys = on")
+        connection.execute("pragma busy_timeout = 5000")
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _ensure_schema(self) -> None:
+        if self._db_path != ":memory:":
+            Path(self._db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                create table if not exists access_code_schema_migrations (
+                    version integer primary key,
+                    name text not null,
+                    applied_at text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists access_code_entitlements (
+                    entitlement_id text primary key,
+                    access_code_hash text not null unique,
+                    status text not null,
+                    tier text not null,
+                    issued_at text not null,
+                    entitlement_json text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists access_code_entitlement_audit (
+                    audit_event_id text primary key,
+                    entitlement_id text,
+                    action text not null,
+                    recorded_at text not null,
+                    audit_json text not null
+                )
+                """
+            )
+            connection.execute(
+                "create index if not exists access_code_entitlements_hash_idx on access_code_entitlements(access_code_hash)"
+            )
+            connection.execute(
+                "create index if not exists access_code_entitlement_audit_lookup_idx on access_code_entitlement_audit(entitlement_id, recorded_at)"
+            )
+            connection.execute(
+                """
+                insert or ignore into access_code_schema_migrations (version, name, applied_at)
+                values (?, ?, ?)
+                """,
+                (ENTITLEMENT_SCHEMA_VERSION, "access_code_entitlements", _now().isoformat()),
+            )
+
+    def _load_state(self) -> None:
+        with self._connect() as connection:
+            records = [
+                AccessCodeEntitlementRecord.model_validate_json(row["entitlement_json"])
+                for row in connection.execute("select entitlement_json from access_code_entitlements order by issued_at asc")
+            ]
+            self._entitlements = {record.entitlementId: record for record in records}
+            self._entitlement_by_hash = {record.accessCodeHash: record.entitlementId for record in records}
+            self._audit = [
+                AccessCodeAuditEvent.model_validate_json(row["audit_json"])
+                for row in connection.execute("select audit_json from access_code_entitlement_audit order by recorded_at asc")
+            ]
+
+    def _persist_entitlement(self, record: AccessCodeEntitlementRecord) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or replace into access_code_entitlements (
+                    entitlement_id,
+                    access_code_hash,
+                    status,
+                    tier,
+                    issued_at,
+                    entitlement_json
+                )
+                values (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.entitlementId,
+                    record.accessCodeHash,
+                    record.status,
+                    record.tier,
+                    record.issuedAt.isoformat(),
+                    record.model_dump_json(),
+                ),
+            )
+
+    def _persist_audit(self, event: AccessCodeAuditEvent) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or ignore into access_code_entitlement_audit (
+                    audit_event_id,
+                    entitlement_id,
+                    action,
+                    recorded_at,
+                    audit_json
+                )
+                values (?, ?, ?, ?, ?)
+                """,
+                (
+                    event.auditEventId,
+                    event.entitlementId,
+                    event.action,
+                    event.recordedAt.isoformat(),
+                    event.model_dump_json(),
+                ),
+            )
+
+
+def create_entitlement_store(settings: Settings | None = None) -> InMemoryEntitlementStore:
+    db_path = (settings.entitlement_db_path or settings.audit_db_path) if settings else None
+    if db_path:
+        try:
+            return DurableEntitlementStore(db_path)
+        except (OSError, sqlite3.DatabaseError) as error:
+            if settings and settings.environment in {"staging", "production"}:
+                raise RuntimeError(
+                    "Durable entitlement store is unavailable; refusing in-memory fallback in staging/production."
+                ) from error
+            return InMemoryEntitlementStore()
+    return InMemoryEntitlementStore()
