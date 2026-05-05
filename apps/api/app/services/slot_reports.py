@@ -261,6 +261,19 @@ def source_policy_record(source_kind: str) -> SourcePolicyRecord:
     )
 
 
+def source_policy_response(now: datetime | None = None) -> SourcePolicyResponse:
+    return SourcePolicyResponse.model_validate(
+        {
+            "appointmentChangingActionAllowed": False,
+            "checkedAt": _utc(now or _now()),
+            "containsSensitiveRawData": False,
+            "credentialAccessAllowed": False,
+            "livePortalAutomationAllowed": False,
+            "records": source_policy_records(),
+        }
+    )
+
+
 class InMemorySlotReportStore:
     def __init__(self) -> None:
         self._contributor_abuse_audit: list[ContributorAbuseAuditEvent] = []
@@ -2023,3 +2036,712 @@ class InMemorySlotReportStore:
         return source
 
 
+class DurableSlotReportStore(InMemorySlotReportStore):
+    def __init__(self, db_path: str) -> None:
+        super().__init__()
+        self._db_path = db_path if db_path == ":memory:" else str(Path(db_path).expanduser())
+        self._ensure_schema()
+        self._load_state()
+
+    def create_report(self, payload: SlotReportCreate, now: datetime | None = None) -> SlotReport:
+        audit_start = len(self._contributor_abuse_audit)
+        try:
+            report = super().create_report(payload, now)
+        except ContributorRateLimitExceeded:
+            for audit_event in self._contributor_abuse_audit[audit_start:]:
+                self._persist_contributor_abuse_audit(audit_event)
+            raise
+        self._persist_report(report)
+        for audit_event in self._contributor_abuse_audit[audit_start:]:
+            self._persist_contributor_abuse_audit(audit_event)
+        return report
+
+    def create_subscription(self, payload: AlertSubscriptionCreate, now: datetime | None = None) -> AlertSubscription:
+        subscription = super().create_subscription(payload, now)
+        self._persist_subscription(subscription)
+        for audit_event in self.subscription_audit(subscription.subscriptionId):
+            self._persist_subscription_audit(audit_event)
+        return subscription
+
+    def update_subscription(
+        self,
+        subscription_id: str,
+        payload: AlertSubscriptionUpdate,
+        now: datetime | None = None,
+    ) -> AlertSubscriptionUpdateResponse | None:
+        response = super().update_subscription(subscription_id, payload, now)
+        if response is None:
+            return response
+        self._persist_subscription(response.subscription)
+        self._persist_subscription_audit(response.auditEvent)
+        self._persist_all_pending_matches()
+        return response
+
+    def delete_subscription(
+        self,
+        subscription_id: str,
+        *,
+        audit_reason: str | None = None,
+        now: datetime | None = None,
+    ) -> AlertSubscriptionDeleteResponse | None:
+        response = super().delete_subscription(subscription_id, audit_reason=audit_reason, now=now)
+        if response is None:
+            return response
+        self._persist_subscription(response.subscription)
+        self._persist_subscription_audit(response.auditEvent)
+        self._delete_pending_matches_for_subscription(subscription_id)
+        return response
+
+    def create_public_estimate_snapshot(
+        self,
+        payload: PublicEstimateSnapshotCreate,
+        now: datetime | None = None,
+    ) -> PublicEstimateSnapshot:
+        snapshot = super().create_public_estimate_snapshot(payload, now)
+        self._persist_public_estimate(snapshot)
+        return snapshot
+
+    def add_contributor_moderation_note(
+        self,
+        contributor_id: str,
+        payload: ContributorModerationNoteCreate,
+        now: datetime | None = None,
+    ) -> ContributorModerationNote:
+        note = super().add_contributor_moderation_note(contributor_id, payload, now)
+        self._persist_contributor_moderation_note(note)
+        return note
+
+    def upsert_contributor_identity(
+        self,
+        contributor_id: str,
+        payload: ContributorIdentityUpsert,
+        now: datetime | None = None,
+    ) -> ContributorIdentityResponse:
+        audit_start = len(self._contributor_identity_audit)
+        response = super().upsert_contributor_identity(contributor_id, payload, now)
+        self._persist_contributor_identity(response.identity)
+        for audit_event in self._contributor_identity_audit[audit_start:]:
+            self._persist_contributor_identity_audit(audit_event)
+        return response
+
+    def acknowledge_delivery(
+        self,
+        notification_id: str,
+        payload: AlertDeliveryAckCreate,
+        now: datetime | None = None,
+    ) -> AlertDeliveryAckResponse | None:
+        response = super().acknowledge_delivery(notification_id, payload, now)
+        if response is None or response.replayed:
+            return response
+        self._persist_delivery_audit(response.deliveryAudit)
+        subscription = self.get_subscription(response.deliveryAudit.subscriptionId)
+        if subscription is not None:
+            self._persist_subscription(subscription)
+        if response.deliveryAudit.deliveryStatus in {"sent", "suppressed"}:
+            self._delete_pending_match(notification_id)
+        else:
+            self._persist_all_pending_matches()
+        return response
+
+    def create_provider_outbox(
+        self,
+        payload: ProviderOutboxCreate,
+        now: datetime | None = None,
+    ) -> ProviderOutboxResponse:
+        response = super().create_provider_outbox(payload, now)
+        for delivery in response.deliveries:
+            self._persist_provider_outbox_delivery(delivery)
+        return response
+
+    def delete_report_with_counts(self, report_id: str) -> dict[str, int | bool]:
+        related_notification_ids = self._related_notification_ids_for_report(report_id)
+        result = super().delete_report_with_counts(report_id)
+        if not result["deleted"]:
+            return result
+        with self._connect() as connection:
+            connection.execute(
+                "delete from slot_signal_reports where report_id = ?",
+                (report_id,),
+            )
+            connection.execute(
+                "delete from slot_signal_pending_matches where report_id = ?",
+                (report_id,),
+            )
+            if related_notification_ids:
+                placeholders = ", ".join("?" for _ in related_notification_ids)
+                connection.execute(
+                    f"delete from slot_signal_delivery_audit where notification_id in ({placeholders})",
+                    tuple(related_notification_ids),
+                )
+        return result
+
+    def export_state(self) -> dict[str, object]:
+        exported = super().export_state()
+        exported["schemaVersion"] = SLOT_SIGNAL_SCHEMA_VERSION
+        return exported
+
+    def prune_reports_before(self, cutoff: datetime, dry_run: bool) -> dict[str, int]:
+        return super().prune_reports_before(cutoff, dry_run)
+
+    def cleanup_stale_pending_matches(
+        self,
+        *,
+        checked_at: datetime | None = None,
+        cutoff_before: datetime | None = None,
+        dry_run: bool = True,
+    ) -> AlertPendingCleanupResponse:
+        response = super().cleanup_stale_pending_matches(
+            checked_at=checked_at,
+            cutoff_before=cutoff_before,
+            dry_run=dry_run,
+        )
+        if not dry_run:
+            self._persist_all_pending_matches_replace()
+        return response
+
+    def _queue_match(self, match: AlertMatch) -> bool:
+        queued = super()._queue_match(match)
+        if queued:
+            self._persist_pending_match(match)
+        return queued
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        connection = sqlite3.connect(self._db_path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("pragma foreign_keys = on")
+        connection.execute("pragma busy_timeout = 5000")
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _ensure_schema(self) -> None:
+        if self._db_path != ":memory:":
+            Path(self._db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                create table if not exists slot_signal_schema_migrations (
+                    version integer primary key,
+                    name text not null,
+                    applied_at text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_reports (
+                    report_id text primary key,
+                    stored_at text not null,
+                    dedupe_key text not null,
+                    trust_status text not null,
+                    report_json text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_subscriptions (
+                    subscription_id text primary key,
+                    created_at text not null,
+                    subscription_json text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_pending_matches (
+                    notification_id text primary key,
+                    subscription_id text not null,
+                    report_id text not null,
+                    created_at text not null,
+                    match_json text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_delivery_audit (
+                    audit_row_id integer primary key autoincrement,
+                    notification_id text not null,
+                    sequence integer not null,
+                    delivery_status text not null,
+                    reason text not null,
+                    acknowledged_at text not null,
+                    audit_json text not null,
+                    unique(notification_id, sequence)
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_subscription_audit (
+                    audit_row_id integer primary key autoincrement,
+                    subscription_id text not null,
+                    action text not null,
+                    recorded_at text not null,
+                    audit_json text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_public_estimates (
+                    estimate_id text primary key,
+                    stored_at text not null,
+                    status text not null,
+                    estimate_json text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_contributor_abuse_audit (
+                    audit_row_id integer primary key autoincrement,
+                    contributor_id text not null,
+                    action text not null,
+                    recorded_at text not null,
+                    audit_json text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_contributor_moderation_notes (
+                    note_id text primary key,
+                    contributor_id text not null,
+                    review_status text not null,
+                    recorded_at text not null,
+                    note_json text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_contributor_identities (
+                    contributor_id text primary key,
+                    contributor_key_id text not null,
+                    last_seen_at text not null,
+                    identity_json text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_contributor_identity_audit (
+                    audit_row_id integer primary key autoincrement,
+                    contributor_id text not null,
+                    action text not null,
+                    recorded_at text not null,
+                    audit_json text not null
+                )
+                """
+            )
+            connection.execute(
+                """
+                create table if not exists slot_signal_provider_outbox (
+                    outbox_delivery_id text primary key,
+                    notification_id text not null,
+                    status text not null,
+                    recorded_at text not null,
+                    delivery_json text not null
+                )
+                """
+            )
+            connection.execute(
+                "create index if not exists slot_signal_reports_scope_idx on slot_signal_reports(dedupe_key, trust_status)"
+            )
+            connection.execute(
+                "create index if not exists slot_signal_pending_lookup_idx on slot_signal_pending_matches(subscription_id, report_id)"
+            )
+            connection.execute(
+                "create index if not exists slot_signal_delivery_audit_lookup_idx on slot_signal_delivery_audit(notification_id)"
+            )
+            connection.execute(
+                "create index if not exists slot_signal_subscription_audit_lookup_idx on slot_signal_subscription_audit(subscription_id)"
+            )
+            connection.execute(
+                "create index if not exists slot_signal_public_estimates_lookup_idx on slot_signal_public_estimates(status, stored_at)"
+            )
+            connection.execute(
+                "create index if not exists slot_signal_contributor_abuse_lookup_idx on slot_signal_contributor_abuse_audit(contributor_id, recorded_at)"
+            )
+            connection.execute(
+                "create index if not exists slot_signal_contributor_moderation_lookup_idx on slot_signal_contributor_moderation_notes(contributor_id, recorded_at)"
+            )
+            connection.execute(
+                "create index if not exists slot_signal_contributor_identity_audit_lookup_idx on slot_signal_contributor_identity_audit(contributor_id, recorded_at)"
+            )
+            connection.execute(
+                "create index if not exists slot_signal_provider_outbox_lookup_idx on slot_signal_provider_outbox(notification_id, recorded_at)"
+            )
+            connection.execute(
+                """
+                insert or ignore into slot_signal_schema_migrations (version, name, applied_at)
+                values (?, ?, ?)
+                """,
+                (SLOT_SIGNAL_SCHEMA_VERSION, "slot_signal_quality_engine", _now().isoformat()),
+            )
+
+    def _load_state(self) -> None:
+        with self._connect() as connection:
+            self._reports = [
+                SlotReport.model_validate_json(row["report_json"])
+                for row in connection.execute("select report_json from slot_signal_reports order by stored_at asc")
+            ]
+            self._subscriptions = {
+                subscription.subscriptionId: subscription
+                for subscription in (
+                    AlertSubscription.model_validate_json(row["subscription_json"])
+                    for row in connection.execute(
+                        "select subscription_json from slot_signal_subscriptions order by created_at asc"
+                    )
+                )
+            }
+            self._pending_matches = [
+                AlertMatch.model_validate_json(row["match_json"])
+                for row in connection.execute("select match_json from slot_signal_pending_matches order by created_at asc")
+            ]
+            self._pending_match_keys = {
+                (match.subscriptionId, match.reportId)
+                for match in self._pending_matches
+            }
+            for row in connection.execute(
+                "select audit_json from slot_signal_delivery_audit order by audit_row_id asc"
+            ):
+                self._record_delivery_audit(AlertDeliveryAuditEvent.model_validate_json(row["audit_json"]))
+            for row in connection.execute(
+                "select audit_json from slot_signal_subscription_audit order by audit_row_id asc"
+            ):
+                self._record_subscription_audit(AlertSubscriptionAuditEvent.model_validate_json(row["audit_json"]))
+            self._public_estimates = [
+                PublicEstimateSnapshot.model_validate_json(row["estimate_json"])
+                for row in connection.execute(
+                    "select estimate_json from slot_signal_public_estimates order by stored_at asc"
+                )
+            ]
+            self._contributor_abuse_audit = [
+                ContributorAbuseAuditEvent.model_validate_json(row["audit_json"])
+                for row in connection.execute(
+                    "select audit_json from slot_signal_contributor_abuse_audit order by audit_row_id asc"
+                )
+            ]
+            self._contributor_moderation_notes = [
+                ContributorModerationNote.model_validate_json(row["note_json"])
+                for row in connection.execute(
+                    "select note_json from slot_signal_contributor_moderation_notes order by recorded_at asc"
+                )
+            ]
+            self._contributor_identities = {
+                identity.contributorId: identity
+                for identity in (
+                    ContributorIdentityRecord.model_validate_json(row["identity_json"])
+                    for row in connection.execute(
+                        "select identity_json from slot_signal_contributor_identities order by last_seen_at asc"
+                    )
+                )
+            }
+            self._contributor_identity_audit = [
+                ContributorIdentityAuditEvent.model_validate_json(row["audit_json"])
+                for row in connection.execute(
+                    "select audit_json from slot_signal_contributor_identity_audit order by audit_row_id asc"
+                )
+            ]
+            self._provider_outbox = [
+                ProviderOutboxDelivery.model_validate_json(row["delivery_json"])
+                for row in connection.execute(
+                    "select delivery_json from slot_signal_provider_outbox order by recorded_at asc"
+                )
+            ]
+
+    def _persist_report(self, report: SlotReport) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or replace into slot_signal_reports (
+                    report_id,
+                    stored_at,
+                    dedupe_key,
+                    trust_status,
+                    report_json
+                )
+                values (?, ?, ?, ?, ?)
+                """,
+                (
+                    report.reportId,
+                    report.storedAt.isoformat(),
+                    report.trust.dedupeKey,
+                    report.trust.status,
+                    report.model_dump_json(),
+                ),
+            )
+
+    def _persist_subscription(self, subscription: AlertSubscription) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or replace into slot_signal_subscriptions (
+                    subscription_id,
+                    created_at,
+                    subscription_json
+                )
+                values (?, ?, ?)
+                """,
+                (
+                    subscription.subscriptionId,
+                    subscription.createdAt.isoformat(),
+                    subscription.model_dump_json(),
+                ),
+            )
+
+    def _persist_pending_match(self, match: AlertMatch) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or replace into slot_signal_pending_matches (
+                    notification_id,
+                    subscription_id,
+                    report_id,
+                    created_at,
+                    match_json
+                )
+                values (?, ?, ?, ?, ?)
+                """,
+                (
+                    match.notificationEvent.notificationId,
+                    match.subscriptionId,
+                    match.reportId,
+                    match.notificationEvent.createdAt.isoformat(),
+                    match.model_dump_json(),
+                ),
+            )
+
+    def _persist_all_pending_matches(self) -> None:
+        for match in self._pending_matches:
+            self._persist_pending_match(self._with_delivery_status(match))
+
+    def _persist_all_pending_matches_replace(self) -> None:
+        with self._connect() as connection:
+            connection.execute("delete from slot_signal_pending_matches")
+            for match in self._pending_matches:
+                hydrated = self._with_delivery_status(match)
+                connection.execute(
+                    """
+                    insert or replace into slot_signal_pending_matches (
+                        notification_id,
+                        subscription_id,
+                        report_id,
+                        created_at,
+                        match_json
+                    )
+                    values (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        hydrated.notificationEvent.notificationId,
+                        hydrated.subscriptionId,
+                        hydrated.reportId,
+                        hydrated.notificationEvent.createdAt.isoformat(),
+                        hydrated.model_dump_json(),
+                    ),
+                )
+
+    def _persist_delivery_audit(self, audit_event: AlertDeliveryAuditEvent) -> None:
+        sequence = len(self._delivery_audit.get(audit_event.notificationId, []))
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or ignore into slot_signal_delivery_audit (
+                    notification_id,
+                    sequence,
+                    delivery_status,
+                    reason,
+                    acknowledged_at,
+                    audit_json
+                )
+                values (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    audit_event.notificationId,
+                    sequence,
+                    audit_event.deliveryStatus,
+                    audit_event.reason,
+                    audit_event.acknowledgedAt.isoformat(),
+                    audit_event.model_dump_json(),
+                ),
+            )
+
+    def _persist_subscription_audit(self, audit_event: AlertSubscriptionAuditEvent) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert into slot_signal_subscription_audit (
+                    subscription_id,
+                    action,
+                    recorded_at,
+                    audit_json
+                )
+                values (?, ?, ?, ?)
+                """,
+                (
+                    audit_event.subscriptionId,
+                    audit_event.action,
+                    audit_event.recordedAt.isoformat(),
+                    audit_event.model_dump_json(),
+                ),
+            )
+
+    def _persist_public_estimate(self, snapshot: PublicEstimateSnapshot) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or replace into slot_signal_public_estimates (
+                    estimate_id,
+                    stored_at,
+                    status,
+                    estimate_json
+                )
+                values (?, ?, ?, ?)
+                """,
+                (
+                    snapshot.estimateId,
+                    snapshot.storedAt.isoformat(),
+                    snapshot.status,
+                    snapshot.model_dump_json(),
+                ),
+            )
+
+    def _persist_contributor_abuse_audit(self, audit_event: ContributorAbuseAuditEvent) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert into slot_signal_contributor_abuse_audit (
+                    contributor_id,
+                    action,
+                    recorded_at,
+                    audit_json
+                )
+                values (?, ?, ?, ?)
+                """,
+                (
+                    audit_event.contributorId,
+                    audit_event.action,
+                    audit_event.recordedAt.isoformat(),
+                    audit_event.model_dump_json(),
+                ),
+            )
+
+    def _persist_contributor_moderation_note(self, note: ContributorModerationNote) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or replace into slot_signal_contributor_moderation_notes (
+                    note_id,
+                    contributor_id,
+                    review_status,
+                    recorded_at,
+                    note_json
+                )
+                values (?, ?, ?, ?, ?)
+                """,
+                (
+                    note.noteId,
+                    note.contributorId,
+                    note.reviewStatus,
+                    note.recordedAt.isoformat(),
+                    note.model_dump_json(),
+                ),
+            )
+
+    def _persist_contributor_identity(self, identity: ContributorIdentityRecord) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or replace into slot_signal_contributor_identities (
+                    contributor_id,
+                    contributor_key_id,
+                    last_seen_at,
+                    identity_json
+                )
+                values (?, ?, ?, ?)
+                """,
+                (
+                    identity.contributorId,
+                    identity.contributorKeyId,
+                    identity.lastSeenAt.isoformat(),
+                    identity.model_dump_json(),
+                ),
+            )
+
+    def _persist_contributor_identity_audit(self, audit_event: ContributorIdentityAuditEvent) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert into slot_signal_contributor_identity_audit (
+                    contributor_id,
+                    action,
+                    recorded_at,
+                    audit_json
+                )
+                values (?, ?, ?, ?)
+                """,
+                (
+                    audit_event.contributorId,
+                    audit_event.action,
+                    audit_event.recordedAt.isoformat(),
+                    audit_event.model_dump_json(),
+                ),
+            )
+
+    def _persist_provider_outbox_delivery(self, delivery: ProviderOutboxDelivery) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                insert or replace into slot_signal_provider_outbox (
+                    outbox_delivery_id,
+                    notification_id,
+                    status,
+                    recorded_at,
+                    delivery_json
+                )
+                values (?, ?, ?, ?, ?)
+                """,
+                (
+                    delivery.outboxDeliveryId,
+                    delivery.notificationId,
+                    delivery.status,
+                    delivery.recordedAt.isoformat(),
+                    delivery.model_dump_json(),
+                ),
+            )
+
+    def _delete_pending_match(self, notification_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "delete from slot_signal_pending_matches where notification_id = ?",
+                (notification_id,),
+            )
+
+    def _delete_pending_matches_for_subscription(self, subscription_id: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "delete from slot_signal_pending_matches where subscription_id = ?",
+                (subscription_id,),
+            )
+
+
+def create_slot_report_store(settings: Settings | None = None) -> InMemorySlotReportStore:
+    if settings and settings.audit_db_path:
+        try:
+            return DurableSlotReportStore(settings.audit_db_path)
+        except (OSError, sqlite3.DatabaseError) as error:
+            if settings.environment in {"staging", "production"}:
+                raise RuntimeError(
+                    "Durable slot report store is unavailable; refusing in-memory fallback in staging/production."
+                ) from error
+            return InMemorySlotReportStore()
+    return InMemorySlotReportStore()
