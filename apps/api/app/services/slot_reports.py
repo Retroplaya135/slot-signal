@@ -169,12 +169,50 @@ class SourcePolicyViolation(Exception):
         self.source_policy = source_policy
 
 
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _new_id(prefix: str) -> str:
     return f"{prefix}:{uuid4().hex[:20]}"
 
 
+def _safe_suffix(value: str) -> str:
+    return "".join(character if character.isalnum() or character in "._:-" else ":" for character in value)[:64]
+
+
+def _safe_key_part(value: str) -> str:
+    normalized = value.strip().casefold()
+    return "".join(character if character.isalnum() else ":" for character in normalized).strip(":")[:80] or "unknown"
+
+
 def _matches_text(left: str, right: str) -> bool:
     return left.casefold() == right.casefold()
+
+
+def _slot_scope_key(report: SlotReport | SlotReportCreate) -> tuple[str, str, str]:
+    return (
+        report.country.casefold(),
+        report.postCity.casefold(),
+        report.visaClass.casefold(),
+    )
+
+
+def _dedupe_key(report: SlotReport | SlotReportCreate) -> str:
+    date_part = ":".join(str(available_date) for available_date in report.availableDates)
+    return (
+        "slot-report-dedupe:"
+        f"{_safe_key_part(report.country)}:"
+        f"{_safe_key_part(report.postCity)}:"
+        f"{_safe_key_part(report.visaClass)}:"
+        f"{date_part}"
+    )[:240]
 
 
 def _matching_dates(report: SlotReport, start_date: date | None, end_date: date | None) -> list[date]:
@@ -195,5 +233,31 @@ def _append_unique(values: list[str], value: str) -> None:
 
 def _clamp_quality_score(score: int) -> int:
     return max(0, min(score, 100))
+
+
+def source_policy_records() -> list[SourcePolicyRecord]:
+    return [SourcePolicyRecord.model_validate(record) for record in SOURCE_POLICY_REGISTRY]
+
+
+def source_policy_record(source_kind: str) -> SourcePolicyRecord:
+    for record in source_policy_records():
+        if record.sourceKind == source_kind:
+            return record
+    return SourcePolicyRecord.model_validate(
+        {
+            "alertEligibility": "blocked_pending_authorization",
+            "allowedInMvp": False,
+            "appointmentChangingActionAllowed": False,
+            "canTriggerSlotAlerts": False,
+            "credentialAccessAllowed": False,
+            "officialAvailabilitySource": False,
+            "policyReason": "Unknown sources require explicit source-policy review before alert eligibility.",
+            "portalAutomationAllowed": False,
+            "proofGate": "written_source_authorization_required",
+            "requiresWrittenAuthorization": True,
+            "sourceKind": "authorized_partner_api",
+            "sourceLane": "authorized_source_pending_evidence",
+        }
+    )
 
 
