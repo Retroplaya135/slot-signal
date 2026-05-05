@@ -36,6 +36,38 @@ def _safe_suffix(value: str) -> str:
     return "".join(character if character.isalnum() or character in "._:-" else ":" for character in value)[:64]
 
 
+def _span(stage: FixtureE2EInstrumentationSpan.model_fields["stage"].annotation, now: datetime, index: int) -> FixtureE2EInstrumentationSpan:
+    started_at = now + timedelta(milliseconds=index)
+    finished_at = started_at + timedelta(milliseconds=1)
+    return FixtureE2EInstrumentationSpan.model_validate(
+        {
+            "durationMs": 1,
+            "finishedAt": finished_at,
+            "result": "succeeded" if stage != "request_validated" else "accepted",
+            "spanId": f"span:fixture_e2e:{index}:{stage}",
+            "stage": stage,
+            "startedAt": started_at,
+        }
+    )
+
+
+def _policy(now: datetime, request_id: str) -> CheckPolicy:
+    return CheckPolicy.model_validate(
+        {
+            "allowAutomatedBooking": False,
+            "cooldownOnResults": ["http_403", "http_429", "auth_redirect", "parser_mismatch", "repeated_empty", "empty_response"],
+            "createdAt": now,
+            "livePortalChecksEnabled": False,
+            "maxChecksPerDay": 24,
+            "minCheckIntervalMinutes": MIN_SAFE_CHECK_INTERVAL_MINUTES,
+            "mode": "fixture_only",
+            "piiStorage": "none",
+            "policyId": f"policy:fixture_e2e:{_safe_suffix(request_id)}",
+            "requireVisibleUserConfirmation": True,
+        }
+    )
+
+
 def _availability_request(payload: FixtureE2ERunRequest, now: datetime) -> AvailabilityCheckRequest:
     return AvailabilityCheckRequest.model_validate(
         {
@@ -130,6 +162,28 @@ def _notification_dispatch(
     return NotificationDispatchBundle.model_validate(dispatch)
 
 
+def _instrumentation(payload: FixtureE2ERunRequest, now: datetime, status: str, replayed_run_id: str | None = None) -> FixtureE2EInstrumentation:
+    stages = [
+        "request_validated",
+        "adapter_completed",
+        "notification_dispatched",
+        "booking_assist_prepared",
+        "audit_persisted",
+    ]
+    return FixtureE2EInstrumentation.model_validate(
+        {
+            "idempotency": FixtureE2EIdempotencyState.model_validate(
+                {
+                    "key": payload.idempotencyKey,
+                    "replayedRunId": replayed_run_id,
+                    "status": status,
+                }
+            ),
+            "spans": [_span(stage, now, index) for index, stage in enumerate(stages, start=1)],
+        }
+    )
+
+
 def _as_replayed(response: FixtureE2ERunResponse) -> FixtureE2ERunResponse:
     return response.model_copy(
         update={
@@ -149,3 +203,101 @@ def _as_replayed(response: FixtureE2ERunResponse) -> FixtureE2ERunResponse:
     )
 
 
+def execute_fixture_e2e_run(payload: FixtureE2ERunRequest, store: FixtureE2EStore) -> FixtureE2ERunResponse:
+    existing = store.get_by_idempotency(payload.idempotencyKey)
+    if existing:
+        return _as_replayed(existing)
+
+    run_started_at = payload.now or _now()
+    suffix = _safe_suffix(payload.idempotencyKey)
+    request = _availability_request(payload, run_started_at)
+    adapter_bundle = FixtureVisaAvailabilityAdapter().run(
+        now=run_started_at,
+        policy=_policy(run_started_at, payload.requestId),
+        request=request,
+        scenario=payload.scenario,
+    )
+
+    session = None
+    if adapter_bundle.snapshot and adapter_bundle.snapshot.candidates:
+        candidate = adapter_bundle.snapshot.candidates[0]
+        session = _booking_assist_session(payload, adapter_bundle.snapshot.snapshotId, candidate.candidateId, run_started_at)
+
+    notification_dispatch = _notification_dispatch(
+        idempotency_key=payload.idempotencyKey,
+        now=run_started_at,
+        session=session,
+        snapshot=adapter_bundle.snapshot,
+        trace_id=payload.traceId,
+    )
+    check_audit = _audit_event(
+        action="check_requested",
+        actor_type="test_harness",
+        idempotency_key=payload.idempotencyKey,
+        occurred_at=run_started_at,
+        reason="manual_check",
+        result="accepted",
+        safe_summary="Fixture workflow request accepted in a controlled test environment.",
+        source="test_harness",
+        suffix=suffix,
+        trace_id=payload.traceId,
+    )
+    audit_events = [check_audit, adapter_bundle.auditEvent]
+    if notification_dispatch:
+        audit_events.append(notification_dispatch.auditEvent)
+    if session:
+        audit_events.append(
+            _audit_event(
+                action="booking_assist_opened",
+                actor_type="backend",
+                idempotency_key=payload.idempotencyKey,
+                occurred_at=_add_minutes(run_started_at, 3),
+                reason="slots_found",
+                result="accepted",
+                safe_summary="Booking-assist session prepared for user review; no appointment-changing action was taken.",
+                source="api",
+                suffix=suffix,
+                trace_id=payload.traceId,
+            )
+        )
+
+    response = FixtureE2ERunResponse.model_validate(
+        {
+            "adapterRun": adapter_bundle.runResult,
+            "appointmentChangingActionTaken": False,
+            "auditEvents": audit_events,
+            "bookingAssistSession": session,
+            "instrumentation": _instrumentation(payload, run_started_at, "created"),
+            "livePortalRequestMade": False,
+            "notificationDispatch": notification_dispatch,
+            "replayed": False,
+            "run": FixtureE2ERun.model_validate(
+                {
+                    "createdAt": run_started_at,
+                    "idempotencyKey": payload.idempotencyKey,
+                    "runId": f"run:fixture_e2e:{suffix}",
+                    "scenario": payload.scenario,
+                    "status": "completed" if adapter_bundle.classification == "success" else "policy_blocked",
+                    "traceId": payload.traceId,
+                }
+            ),
+            "snapshot": adapter_bundle.snapshot,
+        }
+    )
+    saved = store.save(response)
+    if saved is not response:
+        return _as_replayed(saved)
+    return saved
+
+
+def read_fixture_e2e_audit(run_id: str, store: FixtureE2EStore) -> FixtureE2EAuditReadResponse | None:
+    response = store.get_by_run_id(run_id)
+    if not response:
+        return None
+    return FixtureE2EAuditReadResponse.model_validate(
+        {
+            "auditEvents": response.auditEvents,
+            "instrumentation": response.instrumentation,
+            "runId": response.run.runId,
+        }
+    )
