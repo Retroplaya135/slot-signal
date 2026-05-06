@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Extension Dashboard - Slot Signal</title>
+    <meta name="description" content="Controlled beta companion dashboard for Slot Signal extension testing.">
+    <meta name="robots" content="noindex,nofollow">
+    <link rel="canonical" href="__SLOT_SIGNAL_PUBLIC_ORIGIN__/dashboard.html">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="dashboard-page">
+    <svg class="filter-defs" aria-hidden="true" focusable="false">
+      <filter id="visa-liquid-refraction">
+        <feTurbulence type="fractalNoise" baseFrequency="0.018 0.036" numOctaves="2" seed="9" result="noise"></feTurbulence>
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="8" xChannelSelector="R" yChannelSelector="G"></feDisplacementMap>
+      </filter>
+    </svg>
+
+    <div class="app-shell visa-dashboard-shell" data-dashboard-shell>
+      <aside class="sidebar liquid-shell liquid-interactive" data-dashboard-sidebar aria-label="Dashboard navigation">
+        <a class="dashboard-brand" href="/" aria-label="Visa Signal home">
+          <span class="dashboard-brand-mark" aria-hidden="true">VS</span>
+          <span class="dashboard-brand-copy"><strong>Visa Signal</strong><small>Beta</small></span>
+        </a>
+
+        <nav class="nav-list" aria-label="Dashboard sections">
+          <button class="nav-item is-active" type="button" data-dashboard-tab="overview" aria-label="Overview" title="Overview"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm10 7h6V4h-6v16ZM4 20h6v-5H4v5Z"></path></svg><span>Overview</span></button>
+          <button class="nav-item" type="button" data-dashboard-tab="calendar" aria-label="Calendar" title="Calendar"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 2h2v3h6V2h2v3h3v17H4V5h3V2Zm11 8H6v10h12V10Z"></path></svg><span>Calendar</span></button>
+          <button class="nav-item" type="button" data-dashboard-tab="signals" aria-label="Signals" title="Signals"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v3H5V4Zm0 6h10v3H5v-3Zm0 6h14v3H5v-3Z"></path></svg><span>Signals</span></button>
+          <button class="nav-item" type="button" data-dashboard-tab="watches" aria-label="Watches" title="Watches"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9h-2a7 7 0 1 1-7-7V3Zm1 2v8l6 3 .9-1.8-4.9-2.45V5h-2Z"></path></svg><span>Watches</span></button>
+          <button class="nav-item" type="button" data-dashboard-tab="alerts" aria-label="Alerts" title="Alerts"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2v1h16v-1l-2-2ZM9 21h6v-2H9v2Z"></path></svg><span>Alerts</span></button>
+          <button class="nav-item" type="button" data-dashboard-tab="trust" aria-label="Trust" title="Trust"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3Zm-1 14-4-4 1.4-1.4L11 13.2l5.6-5.6L18 9l-7 7Z"></path></svg><span>Trust</span></button>
+          <button class="nav-item" type="button" data-dashboard-tab="estimates" aria-label="Estimates" title="Estimates"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 19h16v2H4v-2Zm2-3h3V7H6v9Zm5 0h3V3h-3v13Zm5 0h3v-6h-3v6Z"></path></svg><span>Estimates</span></button>
+          <button class="nav-item" type="button" data-dashboard-tab="support" aria-label="Support" title="Support"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6V3Zm2 2v14h8V8h-3V5H8Zm2 6h4v2h-4v-2Zm0 4h4v2h-4v-2Z"></path></svg><span>Support</span></button>
+          <button class="nav-item" type="button" data-dashboard-tab="access" aria-label="Access" title="Access"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2a5 5 0 0 0-5 5v3H5v12h14V10h-2V7a5 5 0 0 0-5-5Zm-3 8V7a3 3 0 1 1 6 0v3H9Z"></path></svg><span>Access</span></button>
+          <button class="nav-item" type="button" data-dashboard-tab="stress" aria-label="Stress" title="Stress"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M11 2h2v6h-2V2Zm0 14h2v6h-2v-6ZM2 11h6v2H2v-2Zm14 0h6v2h-6v-2ZM4.2 5.6l1.4-1.4 4.2 4.2-1.4 1.4-4.2-4.2Zm10 10 1.4-1.4 4.2 4.2-1.4 1.4-4.2-4.2Zm0-7.2 4.2-4.2 1.4 1.4-4.2 4.2-1.4-1.4Zm-10 10 4.2-4.2 1.4 1.4-4.2 4.2-1.4-1.4Z"></path></svg><span>Stress</span></button>
+        </nav>
+
+        <div class="rail-status" aria-label="Connection status">
+          <span data-dashboard-last-refresh>Preview</span>
+          <strong data-dashboard-connection-state>Idle</strong>
+          <small>Connection</small>
+        </div>
+      </aside>
+
+      <main class="workspace" id="dashboard-main">
+        <header class="topbar liquid-shell liquid-interactive" data-dashboard-nav data-dashboard-topbar>
+          <label class="search" for="dashboardSearch">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10.8 4a6.8 6.8 0 1 1 0 13.6 6.8 6.8 0 0 1 0-13.6Zm0 2a4.8 4.8 0 1 0 0 9.6 4.8 4.8 0 0 0 0-9.6Zm5.3 9 4.4 4.4-1.4 1.4-4.4-4.4 1.4-1.4Z"></path></svg>
+            <input id="dashboardSearch" data-dashboard-search type="search" placeholder="Search city, class, watch">
+          </label>
+          <div class="topbar-context" aria-label="Runtime state">
+            <span class="status-dot" data-dashboard-status-dot></span>
+            <strong data-dashboard-mode>Preview</strong>
+          </div>
+          <div class="topbar-actions" aria-label="Global actions">
+            <button class="glass-button" type="button" data-theme-toggle aria-label="Toggle theme" title="Theme"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"></path></svg></button>
+            <button class="glass-button" type="button" data-dashboard-sync-alerts aria-label="Sync alerts" title="Sync"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M17.7 6.3A8 8 0 0 0 4 12h2a6 6 0 0 1 10.2-4.2L13 11h8V3l-3.3 3.3ZM6.3 17.7A8 8 0 0 0 20 12h-2A6 6 0 0 1 7.8 16.2L11 13H3v8l3.3-3.3Z"></path></svg></button>
+            <button class="primary-action button primary" type="button" data-dashboard-fetch-latest>Refresh</button>
+          </div>
+        </header>
+
+        <section class="dashboard-view is-active" data-dashboard-view="overview" aria-labelledby="dashboardTitle">
+          <div class="hero-stage">
+            <article class="command-panel content-panel">
+              <div class="hero-copy">
+                <h1 id="dashboardTitle">Extension operations.</h1>
+                <p>Review signals, watches, alerts, trust, and support without exposing private portal data.</p>
+              </div>
+              <div class="period-control liquid-shell liquid-interactive" role="group" aria-label="Quick actions">
+                <button class="range-button is-active" type="button" data-dashboard-fetch-latest>Refresh</button>
+                <button class="range-button" type="button" data-dashboard-submit-signal>Submit signal</button>
+                <button class="range-button" type="button" data-dashboard-create-watch>Create watch</button>
+                <button class="range-button" type="button" data-dashboard-export>Export</button>
+              </div>
+              <div class="signal-row" aria-label="Runtime summary" data-dashboard-summary-strip>
+                <span><strong data-dashboard-metric="signals">0</strong> signals</span>
+                <span><strong data-dashboard-metric="watches">0</strong> watches</span>
+                <span><strong data-dashboard-metric="alerts">0</strong> alerts</span>
+                <span><strong data-dashboard-metric="estimates">0</strong> estimates</span>
+              </div>
+            </article>
+
+            <aside class="lens-card extension-lens liquid-interactive" aria-label="Extension status">
+              <div class="lens-grid">
+                <span>API</span><strong data-dashboard-lens-api>Preview</strong>
+                <span>Access</span><strong data-dashboard-lens-access>Local</strong>
+                <span>Trust</span><strong data-dashboard-metric="trust">0</strong>
+                <span>History</span><strong data-dashboard-metric="history">0</strong>
+              </div>
+              <div class="media-overlay liquid-shell">
+                <span>Controlled beta</span>
+                <strong>Manual review only</strong>
+                <button class="glass-button" type="button" data-dashboard-tab="access" aria-label="Open access"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12h12l-5-5 1.4-1.4L21 13l-7.6 7.4L12 19l5-5H5v-2Z"></path></svg></button>
+              </div>
+            </aside>
+          </div>
+
+          <section class="signal-strip" aria-label="Dashboard metrics">
+            <article class="metric-card content-panel"><span>Signals</span><strong data-dashboard-metric="signals">0</strong><small>community metadata</small></article>
+            <article class="metric-card content-panel"><span>Watches</span><strong data-dashboard-metric="watches">0</strong><small>alert filters</small></article>
+            <article class="metric-card content-panel"><span>Pending</span><strong data-dashboard-metric="alerts">0</strong><small>alert matches</small></article>
+            <article class="metric-card content-panel"><span>History</span><strong data-dashboard-metric="history">0</strong><small>delivery events</small></article>
+          </section>
+
+          <div class="work-grid">
+            <section class="chart-panel content-panel" aria-labelledby="flowTitle">
+              <div class="panel-heading">
+                <div><span class="panel-label">Signal flow</span><h2 id="flowTitle">Activity trend</h2></div>
+                <span class="status-pill" data-dashboard-chart-status>Preview data</span>
+              </div>
+              <svg class="line-chart" data-dashboard-chart role="img" aria-label="Signal and alert trend" viewBox="0 0 720 280"></svg>
+            </section>
+
+            <section class="calendar-panel content-panel" aria-labelledby="miniCalendarTitle">
+              <div class="panel-heading compact">
+                <div><span class="panel-label">Calendar</span><h2 id="miniCalendarTitle">Signal plan</h2></div>
+                <button class="glass-action" type="button" data-dashboard-tab="calendar">Open</button>
+              </div>
+              <div class="mini-calendar" data-dashboard-mini-calendar></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="dashboard-view" data-dashboard-view="calendar" aria-labelledby="calendarTitle">
+          <div class="calendar-layout">
+            <article class="calendar-panel content-panel">
+              <div class="panel-heading">
+                <div><span class="panel-label">Calendar</span><h2 id="calendarTitle" data-dashboard-calendar-title>Signal calendar</h2></div>
+                <div class="calendar-controls" role="group" aria-label="Calendar controls">
+                  <button class="glass-action" type="button" data-dashboard-calendar-prev>Prev</button>
+                  <button class="glass-action" type="button" data-dashboard-calendar-today>Today</button>
+                  <button class="glass-action" type="button" data-dashboard-calendar-next>Next</button>
+                </div>
+              </div>
+              <div class="calendar-legend" aria-label="Calendar legend">
+                <span><i class="dot fresh"></i>Fresh signal</span>
+                <span><i class="dot caution"></i>Stale or low trust</span>
+                <span><i class="band watch"></i>Watch window</span>
+                <span><i class="dot estimate"></i>Estimate, not slot availability</span>
+              </div>
+              <div class="calendar-weekdays" aria-hidden="true"><span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span></div>
+              <div class="calendar-grid" data-dashboard-calendar-grid></div>
+            </article>
+
+            <aside class="calendar-detail content-panel" data-dashboard-calendar-selected aria-label="Selected date"></aside>
+          </div>
+        </section>
+
+        <section class="table-panel content-panel dashboard-view" data-dashboard-view="signals" aria-labelledby="signalsTitle">
+          <div class="panel-heading">
+            <div><span class="panel-label">Signals</span><h2 id="signalsTitle">Community metadata</h2></div>
+            <button class="primary-action" type="button" data-dashboard-submit-signal>Submit test signal</button>
+          </div>
+          <div class="signal-table" data-dashboard-signals></div>
+        </section>
+
+        <section class="table-panel content-panel dashboard-view" data-dashboard-view="watches" aria-labelledby="watchesTitle">
+          <div class="panel-heading">
+            <div><span class="panel-label">Watches</span><h2 id="watchesTitle">Alert filters</h2></div>
+            <button class="primary-action" type="button" data-dashboard-create-watch>Create watch</button>
+          </div>
+          <div class="watch-list" data-dashboard-watchlist></div>
+        </section>
+
+        <section class="table-panel content-panel dashboard-view" data-dashboard-view="alerts" aria-labelledby="alertsTitle">
+          <div class="panel-heading">
+            <div><span class="panel-label">Alerts</span><h2 id="alertsTitle">Queue and history</h2></div>
+            <button class="primary-action" type="button" data-dashboard-sync-alerts>Sync alerts</button>
+          </div>
+          <div class="activity-list" data-dashboard-activity></div>
+        </section>
+
+        <section class="dashboard-view" data-dashboard-view="trust" aria-labelledby="trustTitle">
+          <div class="form-grid">
+            <article class="content-panel dashboard-panel">
+              <span class="panel-label">Trust</span>
+              <h2 id="trustTitle">Contributor profile</h2>
+              <form class="dashboard-form inline-form" data-dashboard-trust-form>
+                <label>Contributor ID<input data-dashboard-contributor-id name="contributorId" value="dashboard-tester-001" autocomplete="off"></label>
+                <button class="primary-action" type="submit" data-dashboard-refresh-trust>Refresh trust</button>
+              </form>
+              <div class="summary-list" data-dashboard-trust-summary></div>
+            </article>
+            <article class="content-panel dashboard-panel">
+              <span class="panel-label">Moderation</span>
+              <h2>Notes and audit</h2>
+              <textarea data-dashboard-moderation-note rows="4" placeholder="Safe note, no private data"></textarea>
+              <div class="action-row">
+                <button class="glass-action" type="button" data-dashboard-add-moderation>Add note</button>
+                <button class="glass-action" type="button" data-dashboard-rotate-identity>Rotate identity</button>
+              </div>
+              <div class="summary-list" data-dashboard-abuse-audit></div>
+              <div class="summary-list" data-dashboard-moderation-notes></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="dashboard-view" data-dashboard-view="estimates" aria-labelledby="estimatesTitle">
+          <div class="form-grid">
+            <article class="content-panel dashboard-panel">
+              <span class="panel-label">Estimates</span>
+              <h2 id="estimatesTitle">Public context</h2>
+              <p class="muted">Estimate context only. Not slot availability.</p>
+              <form class="dashboard-form" data-dashboard-estimate-form>
+                <label>Label<input data-dashboard-estimate-label name="label" value="Public context sample" autocomplete="off"></label>
+                <label>Days out<input data-dashboard-estimate-days name="daysOut" type="number" min="1" max="180" value="35"></label>
+                <button class="primary-action" type="submit" data-dashboard-submit-estimate>Add estimate</button>
+              </form>
+              <div class="action-row">
+                <button class="glass-action" type="button" data-dashboard-refresh-estimates>Refresh</button>
+                <button class="glass-action" type="button" data-dashboard-import-estimate>Import fixture</button>
+              </div>
+            </article>
+            <article class="content-panel dashboard-panel">
+              <span class="panel-label">Context</span>
+              <h2>Latest estimate feed</h2>
+              <div class="summary-list" data-dashboard-estimates></div>
+              <div class="summary-list" data-dashboard-source-policy></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="form-grid dashboard-view" data-dashboard-view="support" aria-label="Support tools">
+          <article class="content-panel dashboard-panel">
+            <span class="panel-label">Support</span>
+            <h2>Redacted export</h2>
+            <p class="muted">Safe state only.</p>
+            <button class="primary-action" type="button" data-dashboard-export>Export state</button>
+            <pre class="mini-output" data-dashboard-export-preview aria-label="Export preview">No export yet.</pre>
+          </article>
+          <article class="content-panel dashboard-panel">
+            <span class="panel-label">Cleanup</span>
+            <h2>Advanced tools</h2>
+            <p class="muted">Requires beta code.</p>
+            <button class="glass-action" type="button" data-dashboard-advanced-unlock>Unlock</button>
+            <div class="advanced-box" data-dashboard-advanced hidden>
+              <label>Cutoff hours<input data-dashboard-retention-cutoff type="number" min="1" max="720" value="168"></label>
+              <button class="glass-action" type="button" data-dashboard-retention-dry-run>Retention dry-run</button>
+              <button class="glass-action" type="button" data-dashboard-cleanup>Clean stale alerts</button>
+              <button class="glass-action danger-action" type="button" data-dashboard-delete-latest-report>Delete latest test signal</button>
+            </div>
+          </article>
+        </section>
+
+        <section class="form-grid dashboard-view" data-dashboard-view="access" aria-label="Access setup">
+          <article class="content-panel dashboard-panel">
+            <span class="panel-label">Access</span>
+            <h2>Connection</h2>
+            <form class="dashboard-form" data-dashboard-config-form>
+              <label>Service URL<input data-dashboard-api-base name="apiBaseUrl" autocomplete="off"></label>
+              <label>Client key<input data-dashboard-client-key name="clientKey" autocomplete="off"></label>
+              <label>Access code<input data-dashboard-access-code name="accessCode" autocomplete="off"></label>
+              <button class="primary-action" type="submit">Save</button>
+            </form>
+          </article>
+          <article class="content-panel dashboard-panel">
+            <span class="panel-label">Scenario</span>
+            <h2>Test signal</h2>
+            <form class="dashboard-form" data-dashboard-signal-form>
+              <label>Country<input name="country" value="Canada" autocomplete="off"></label>
+              <label>City<input name="postCity" value="Toronto" autocomplete="off"></label>
+              <label>Class<input name="visaClass" value="B1/B2" autocomplete="off"></label>
+              <button class="primary-action" type="submit" data-dashboard-submit-signal>Submit</button>
+            </form>
+          </article>
+        </section>
+
+        <section class="dashboard-view" data-dashboard-view="stress" aria-labelledby="stressTitle">
+          <article class="content-panel dashboard-panel">
+            <div class="panel-heading">
+              <div><span class="panel-label">Stress</span><h2 id="stressTitle">Readiness checks</h2></div>
+              <button class="primary-action" type="button" data-dashboard-run-stress>Run local checks</button>
+            </div>
+            <div class="stress-grid" data-dashboard-stress-list></div>
+            <div class="mini-output" data-dashboard-stress-status>Open the proof gate for full 20-step evidence.</div>
+          </article>
+        </section>
+
+        <section class="toast liquid-shell" aria-live="polite" aria-label="Dashboard messages">
+          <span data-dashboard-toast>Ready.</span>
+        </section>
+      </main>
+    </div>
+
+    <script src="/site-config.js"></script>
+    <script src="/site.js"></script>
+    <script src="/dashboard.js"></script>
+  </body>
+</html>
