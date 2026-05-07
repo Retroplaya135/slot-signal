@@ -67,6 +67,24 @@ def _cooldown_minutes_for_scenario(scenario: FixtureAdapterScenario, policy: Che
     return policy.minCheckIntervalMinutes
 
 
+def classify_adapter_run_result(result: AdapterRunResult) -> AdapterClassification:
+    if result.resultReason == "policy_blocked":
+        return "policy_blocked"
+    if result.resultReason in {"auth_redirect", "permission_missing"}:
+        return "auth_required"
+    if result.resultReason == "parser_mismatch":
+        return "parser_mismatch"
+    if result.status == "cooldown":
+        return "cooldown"
+    if result.resultReason == "network_error" and result.retryable:
+        return "retry"
+    if result.status == "no_slots" or result.resultReason == "no_slots":
+        return "no_slots"
+    if result.status == "succeeded" and result.resultReason in {"slots_found", "fixture_data"}:
+        return "success"
+    return "retry" if result.retryable else "policy_blocked"
+
+
 def _build_snapshot(
     *,
     captured_at: datetime,
@@ -161,3 +179,122 @@ def _build_run_result(
     )
 
 
+def _build_audit_event(
+    *,
+    adapter_id: str,
+    finished_at: datetime,
+    request: AvailabilityCheckRequest,
+    run_result: AdapterRunResult,
+) -> AuditEvent:
+    classification = classify_adapter_run_result(run_result)
+    result_by_classification = {
+        "auth_required": "failed",
+        "cooldown": "cooldown",
+        "no_slots": "succeeded",
+        "parser_mismatch": "failed",
+        "policy_blocked": "rejected",
+        "retry": "failed",
+        "success": "succeeded",
+    }
+    action_by_classification = {
+        "auth_required": "policy_rejected",
+        "cooldown": "cooldown_started",
+        "no_slots": "snapshot_recorded",
+        "parser_mismatch": "policy_rejected",
+        "policy_blocked": "policy_rejected",
+        "retry": "policy_rejected",
+        "success": "snapshot_recorded",
+    }
+
+    return AuditEvent.model_validate(
+        {
+            "action": action_by_classification[classification],
+            "actorType": "adapter",
+            "auditId": f"audit:source_adapter:{_safe_suffix(request.requestId)}:{run_result.resultReason}",
+            "containsSensitiveRawData": False,
+            "idempotencyKey": request.idempotencyKey,
+            "occurredAt": finished_at,
+            "reason": run_result.resultReason,
+            "redactionLevel": "no_secrets",
+            "result": result_by_classification[classification],
+            "safeSummary": f"{adapter_id} classified fixture-safe result as {classification}.",
+            "source": "fixture_adapter" if request.sourceKind == "fixture" else "api",
+            "traceId": request.traceId,
+        }
+    )
+
+
+def _policy_blocked_bundle(*, adapter_id: str, now: datetime, request: AvailabilityCheckRequest) -> AdapterRunBundle:
+    run_result = AdapterRunResult.model_validate(
+        {
+            "cooldownMinutes": None,
+            "finishedAt": now,
+            "httpStatus": None,
+            "livePortalRequestMade": False,
+            "nextAllowedCheckAt": None,
+            "requestId": request.requestId,
+            "resultReason": "policy_blocked",
+            "retryable": False,
+            "runId": f"run:source_adapter:{_safe_suffix(request.requestId)}:policy_blocked",
+            "snapshotId": None,
+            "sourceKind": request.sourceKind,
+            "startedAt": now - timedelta(seconds=1),
+            "status": "failed",
+            "traceId": request.traceId,
+        }
+    )
+    return AdapterRunBundle(
+        adapterId=adapter_id,
+        auditEvent=_build_audit_event(adapter_id=adapter_id, finished_at=now, request=request, run_result=run_result),
+        classification=classify_adapter_run_result(run_result),
+        request=request,
+        runResult=run_result,
+        snapshot=None,
+    )
+
+
+class FixtureVisaAvailabilityAdapter:
+    adapterId = "adapter:fixture:visa-availability"
+    sourceKind = "fixture"
+
+    def run(
+        self,
+        *,
+        policy: CheckPolicy,
+        request: AvailabilityCheckRequest,
+        now: datetime | None = None,
+        scenario: FixtureAdapterScenario = "slots_found",
+    ) -> AdapterRunBundle:
+        finished_at = now or _now()
+        if policy.livePortalChecksEnabled or request.livePortalChecksEnabled or request.sourceKind != "fixture":
+            return _policy_blocked_bundle(adapter_id=self.adapterId, now=finished_at, request=request)
+        if scenario == "policy_blocked":
+            return _policy_blocked_bundle(adapter_id=self.adapterId, now=finished_at, request=request)
+
+        snapshot = _build_snapshot(captured_at=finished_at, policy=policy, request=request, scenario=scenario) if scenario in {"slots_found", "no_slots"} else None
+        run_result = _build_run_result(finished_at=finished_at, policy=policy, request=request, scenario=scenario, snapshot=snapshot)
+        return AdapterRunBundle(
+            adapterId=self.adapterId,
+            auditEvent=_build_audit_event(adapter_id=self.adapterId, finished_at=finished_at, request=request, run_result=run_result),
+            classification=classify_adapter_run_result(run_result),
+            request=request,
+            runResult=run_result,
+            snapshot=snapshot,
+        )
+
+
+class PublicReferenceAvailabilityAdapter:
+    adapterId = "adapter:public-reference:placeholder"
+    sourceKind = "public_reference"
+
+    def run(
+        self,
+        *,
+        policy: CheckPolicy,
+        request: AvailabilityCheckRequest,
+        now: datetime | None = None,
+        scenario: FixtureAdapterScenario = "policy_blocked",
+    ) -> AdapterRunBundle:
+        _ = policy
+        _ = scenario
+        return _policy_blocked_bundle(adapter_id=self.adapterId, now=now or _now(), request=request)
