@@ -1,0 +1,147 @@
+from datetime import date, datetime, timedelta, timezone
+
+from fastapi import APIRouter, HTTPException, Path, Request
+
+from app.api.v1.entitlements import require_valid_entitlement
+from app.core.auth import require_admin_auth, require_client_or_admin_auth
+from app.schemas.slot_reports import (
+    AlertDeliveryAckCreate,
+    AlertDeliveryAckResponse,
+    AlertDeliveryHistoryResponse,
+    AlertDeliveryAuditResponse,
+    AlertDigestDeliveryAckCreate,
+    AlertDigestDeliveryAckResponse,
+    AlertMatchesResponse,
+    AlertNotificationDigestResponse,
+    AlertNotificationQueueResponse,
+    AlertPendingCleanupRequest,
+    AlertPendingCleanupResponse,
+    AlertSubscriptionCreate,
+    AlertSubscriptionCreateResponse,
+    AlertSubscriptionDeleteResponse,
+    AlertSubscriptionListResponse,
+    AlertSubscriptionUpdate,
+    AlertSubscriptionUpdateResponse,
+    ContributorAbuseAuditResponse,
+    ContributorIdentityResponse,
+    ContributorIdentityUpsert,
+    ContributorModerationNoteCreate,
+    ContributorModerationNoteCreateResponse,
+    ContributorModerationNotesResponse,
+    ContributorTrustResponse,
+    NotificationAdapterSandboxCreate,
+    NotificationAdapterSandboxHistoryResponse,
+    NotificationAdapterSandboxResponse,
+    ProviderDeliveryReadinessResponse,
+    ProviderOutboxCreate,
+    ProviderOutboxHistoryResponse,
+    ProviderOutboxResponse,
+    PublicContextSummaryResponse,
+    PublicEstimateFixtureImportRequest,
+    PublicEstimateFixtureImportResponse,
+    PublicEstimateLatestResponse,
+    PublicEstimateSnapshot,
+    PublicEstimateSnapshotCreate,
+    PublicEstimateSnapshotCreateResponse,
+    SlotSignalDeleteResponse,
+    SlotSignalExportResponse,
+    SlotSignalRetentionPruneRequest,
+    SlotSignalRetentionPruneResponse,
+    SlotReport,
+    SlotReportCreate,
+    SlotReportLatestResponse,
+    SourcePolicyResponse,
+)
+from app.services.slot_reports import (
+    ContributorRateLimitExceeded,
+    InMemorySlotReportStore,
+    PublicEstimateSourceNotAllowed,
+    SourcePolicyViolation,
+    create_slot_report_store,
+    source_policy_response,
+)
+
+router = APIRouter(tags=["slot-reports"])
+
+
+def _store(request: Request) -> InMemorySlotReportStore:
+    store = getattr(request.app.state, "slot_report_store", None)
+    if store is None:
+        store = create_slot_report_store(getattr(request.app.state, "settings", None))
+        request.app.state.slot_report_store = store
+    return store
+
+
+def _ensure_persistence_admin_allowed(request: Request) -> None:
+    require_admin_auth(request)
+    require_valid_entitlement(request, required_tier="beta")
+
+
+def _clock_now(request: Request) -> datetime | None:
+    return getattr(getattr(request.app.state, "settings", None), "clock_now", None)
+
+
+@router.post("/alert-subscriptions", response_model=AlertSubscriptionCreateResponse)
+async def create_alert_subscription(
+    payload: AlertSubscriptionCreate,
+    request: Request,
+) -> AlertSubscriptionCreateResponse:
+    require_client_or_admin_auth(request)
+    store = _store(request)
+    subscription = store.create_subscription(payload)
+    return AlertSubscriptionCreateResponse.model_validate(
+        {
+            "initialMatches": store.matches_for_subscription(subscription.subscriptionId),
+            "subscription": subscription,
+        }
+    )
+
+
+@router.post("/alert-notifications/digest/{subscription_id}/delivery-ack", response_model=AlertDigestDeliveryAckResponse)
+async def acknowledge_digest_alert_delivery(
+    subscription_id: str,
+    payload: AlertDigestDeliveryAckCreate,
+    request: Request,
+) -> AlertDigestDeliveryAckResponse:
+    require_client_or_admin_auth(request)
+    response = _store(request).acknowledge_digest_delivery(subscription_id, payload)
+    if response is None:
+        raise HTTPException(status_code=404, detail="Digest alert subscription was not found.")
+    return response
+
+
+@router.post("/alert-notifications/pending/cleanup", response_model=AlertPendingCleanupResponse)
+async def cleanup_pending_alert_notifications(
+    payload: AlertPendingCleanupRequest,
+    request: Request,
+) -> AlertPendingCleanupResponse:
+    require_client_or_admin_auth(request)
+    return _store(request).cleanup_stale_pending_matches(
+        checked_at=payload.checkedAt,
+        cutoff_before=payload.cutoffBefore,
+        dry_run=payload.dryRun,
+    )
+
+
+@router.post("/alert-notifications/{notification_id}/delivery-ack", response_model=AlertDeliveryAckResponse)
+async def acknowledge_alert_notification_delivery(
+    notification_id: str,
+    payload: AlertDeliveryAckCreate,
+    request: Request,
+) -> AlertDeliveryAckResponse:
+    require_client_or_admin_auth(request)
+    response = _store(request).acknowledge_delivery(notification_id, payload)
+    if response is None:
+        raise HTTPException(status_code=404, detail="Alert notification was not found.")
+    return response
+
+
+@router.post("/alert-notifications/provider-outbox", response_model=ProviderOutboxResponse)
+async def create_alert_notification_provider_outbox(
+    payload: ProviderOutboxCreate,
+    request: Request,
+) -> ProviderOutboxResponse:
+    require_admin_auth(request)
+    return _store(request).create_provider_outbox(payload)
+
+
