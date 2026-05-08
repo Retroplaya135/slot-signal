@@ -101,6 +101,30 @@ async def create_slot_report(payload: SlotReportCreate, request: Request) -> Slo
         ) from error
 
 
+@router.get("/slot-reports/latest", response_model=SlotReportLatestResponse)
+async def read_latest_slot_reports(
+    request: Request,
+    country: str | None = None,
+    includeLowTrust: bool = False,
+    includeStale: bool = False,
+    postCity: str | None = None,
+    targetEndDate: date | None = None,
+    targetStartDate: date | None = None,
+    visaClass: str | None = None,
+) -> SlotReportLatestResponse:
+    require_client_or_admin_auth(request)
+    reports = _store(request).latest_reports(
+        country=country,
+        include_low_trust=includeLowTrust,
+        include_stale=includeStale,
+        post_city=postCity,
+        target_end_date=targetEndDate,
+        target_start_date=targetStartDate,
+        visa_class=visaClass,
+    )
+    return SlotReportLatestResponse.model_validate({"reports": reports})
+
+
 @router.post("/alert-subscriptions", response_model=AlertSubscriptionCreateResponse)
 async def create_alert_subscription(
     payload: AlertSubscriptionCreate,
@@ -160,6 +184,34 @@ async def read_alert_subscription_matches(subscription_id: str, request: Request
     )
 
 
+@router.get("/contributors/{contributor_id}/trust", response_model=ContributorTrustResponse)
+async def read_contributor_trust(
+    request: Request,
+    contributor_id: str = Path(min_length=8, max_length=120),
+) -> ContributorTrustResponse:
+    require_client_or_admin_auth(request)
+    return ContributorTrustResponse.model_validate({"trust": _store(request).contributor_trust(contributor_id)})
+
+
+@router.get("/contributors/{contributor_id}/identity", response_model=ContributorIdentityResponse)
+async def read_contributor_identity(
+    request: Request,
+    contributor_id: str = Path(min_length=8, max_length=120),
+) -> ContributorIdentityResponse:
+    require_client_or_admin_auth(request)
+    store = _store(request)
+    identity = store.contributor_identity(contributor_id)
+    if identity is None:
+        raise HTTPException(status_code=404, detail="Contributor identity has not been registered locally.")
+    return ContributorIdentityResponse.model_validate(
+        {
+            "auditEvents": store.contributor_identity_audit(contributor_id),
+            "containsSensitiveRawData": False,
+            "identity": identity,
+        }
+    )
+
+
 @router.get("/contributors/{contributor_id}/abuse-audit", response_model=ContributorAbuseAuditResponse)
 async def read_contributor_abuse_audit(
     request: Request,
@@ -186,6 +238,20 @@ async def create_contributor_moderation_note(
         {
             "containsSensitiveRawData": False,
             "note": note,
+        }
+    )
+
+
+@router.get("/contributors/{contributor_id}/moderation-notes", response_model=ContributorModerationNotesResponse)
+async def read_contributor_moderation_notes(
+    request: Request,
+    contributor_id: str = Path(min_length=8, max_length=120),
+) -> ContributorModerationNotesResponse:
+    require_admin_auth(request)
+    return ContributorModerationNotesResponse.model_validate(
+        {
+            "containsSensitiveRawData": False,
+            "notes": _store(request).contributor_moderation_notes(contributor_id),
         }
     )
 
@@ -221,6 +287,75 @@ async def import_public_estimate_fixture(
                 "sourceUrl": error.source_url,
             },
         ) from error
+
+
+@router.get("/public-estimates/latest", response_model=PublicEstimateLatestResponse)
+async def read_latest_public_estimates(
+    request: Request,
+    country: str | None = None,
+    includeQuarantined: bool = False,
+    postCity: str | None = None,
+    visaClass: str | None = None,
+) -> PublicEstimateLatestResponse:
+    require_client_or_admin_auth(request)
+    estimates, quarantined_count = _store(request).latest_public_estimates(
+        country=country,
+        include_quarantined=includeQuarantined,
+        post_city=postCity,
+        visa_class=visaClass,
+    )
+    return PublicEstimateLatestResponse.model_validate(
+        {
+            "estimates": estimates,
+            "quarantinedCount": quarantined_count,
+        }
+    )
+
+
+@router.get("/public-context/summary", response_model=PublicContextSummaryResponse)
+async def read_public_context_summary(
+    request: Request,
+    country: str | None = None,
+    includeQuarantined: bool = False,
+    postCity: str | None = None,
+    visaClass: str | None = None,
+) -> PublicContextSummaryResponse:
+    require_client_or_admin_auth(request)
+    return _store(request).public_context_summary(
+        country=country,
+        include_quarantined=includeQuarantined,
+        post_city=postCity,
+        visa_class=visaClass,
+    )
+
+
+@router.get("/alert-notifications/pending", response_model=AlertNotificationQueueResponse)
+async def read_pending_alert_notifications(
+    request: Request,
+    includeBackoff: bool = False,
+    includeDigest: bool = False,
+) -> AlertNotificationQueueResponse:
+    require_client_or_admin_auth(request)
+    return AlertNotificationQueueResponse.model_validate(
+        {
+            "pendingMatches": _store(request).pending_notification_matches(
+                include_backoff=includeBackoff,
+                include_digest=includeDigest,
+            )
+        }
+    )
+
+
+@router.get("/alert-notifications/digest", response_model=AlertNotificationDigestResponse)
+async def read_digest_alert_notifications(request: Request) -> AlertNotificationDigestResponse:
+    require_client_or_admin_auth(request)
+    return AlertNotificationDigestResponse.model_validate(
+        {
+            "containsSensitiveRawData": False,
+            "groups": _store(request).digest_notification_groups(),
+            "slotAlertsDelivered": False,
+        }
+    )
 
 
 @router.post("/alert-notifications/digest/{subscription_id}/delivery-ack", response_model=AlertDigestDeliveryAckResponse)
