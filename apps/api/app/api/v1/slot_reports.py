@@ -101,6 +101,11 @@ async def create_slot_report(payload: SlotReportCreate, request: Request) -> Slo
         ) from error
 
 
+@router.get("/source-policy", response_model=SourcePolicyResponse)
+async def read_source_policy() -> SourcePolicyResponse:
+    return source_policy_response()
+
+
 @router.get("/slot-reports/latest", response_model=SlotReportLatestResponse)
 async def read_latest_slot_reports(
     request: Request,
@@ -156,6 +161,19 @@ async def read_alert_subscriptions(
     )
 
 
+@router.patch("/alert-subscriptions/{subscription_id}", response_model=AlertSubscriptionUpdateResponse)
+async def update_alert_subscription(
+    subscription_id: str,
+    payload: AlertSubscriptionUpdate,
+    request: Request,
+) -> AlertSubscriptionUpdateResponse:
+    require_client_or_admin_auth(request)
+    response = _store(request).update_subscription(subscription_id, payload)
+    if response is None:
+        raise HTTPException(status_code=404, detail="Alert subscription was not found.")
+    return response
+
+
 @router.delete("/alert-subscriptions/{subscription_id}", response_model=AlertSubscriptionDeleteResponse)
 async def delete_alert_subscription(
     subscription_id: str,
@@ -191,6 +209,16 @@ async def read_contributor_trust(
 ) -> ContributorTrustResponse:
     require_client_or_admin_auth(request)
     return ContributorTrustResponse.model_validate({"trust": _store(request).contributor_trust(contributor_id)})
+
+
+@router.put("/contributors/{contributor_id}/identity", response_model=ContributorIdentityResponse)
+async def upsert_contributor_identity(
+    payload: ContributorIdentityUpsert,
+    request: Request,
+    contributor_id: str = Path(min_length=8, max_length=120),
+) -> ContributorIdentityResponse:
+    require_client_or_admin_auth(request)
+    return _store(request).upsert_contributor_identity(contributor_id, payload)
 
 
 @router.get("/contributors/{contributor_id}/identity", response_model=ContributorIdentityResponse)
@@ -428,6 +456,15 @@ async def read_alert_notification_delivery_history(request: Request) -> AlertDel
             "countsByStatus": counts,
         }
     )
+
+
+@router.post("/alert-notifications/adapter-sandbox", response_model=NotificationAdapterSandboxResponse)
+async def sandbox_alert_notification_adapters(
+    payload: NotificationAdapterSandboxCreate,
+    request: Request,
+) -> NotificationAdapterSandboxResponse:
+    require_admin_auth(request)
+    return _store(request).sandbox_notification_adapters(payload)
 
 
 @router.get("/alert-notifications/adapter-sandbox/history", response_model=NotificationAdapterSandboxHistoryResponse)
