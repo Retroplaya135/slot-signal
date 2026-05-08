@@ -117,6 +117,21 @@ async def create_alert_subscription(
     )
 
 
+@router.get("/alert-subscriptions", response_model=AlertSubscriptionListResponse)
+async def read_alert_subscriptions(
+    request: Request,
+    includeDeleted: bool = False,
+) -> AlertSubscriptionListResponse:
+    require_client_or_admin_auth(request)
+    store = _store(request)
+    return AlertSubscriptionListResponse.model_validate(
+        {
+            "auditEvents": store.subscription_audit(),
+            "subscriptions": store.list_subscriptions(include_deleted=includeDeleted),
+        }
+    )
+
+
 @router.delete("/alert-subscriptions/{subscription_id}", response_model=AlertSubscriptionDeleteResponse)
 async def delete_alert_subscription(
     subscription_id: str,
@@ -128,6 +143,35 @@ async def delete_alert_subscription(
     if response is None:
         raise HTTPException(status_code=404, detail="Alert subscription was not found.")
     return response
+
+
+@router.get("/alert-subscriptions/{subscription_id}/matches", response_model=AlertMatchesResponse)
+async def read_alert_subscription_matches(subscription_id: str, request: Request) -> AlertMatchesResponse:
+    require_client_or_admin_auth(request)
+    store = _store(request)
+    subscription = store.get_subscription(subscription_id)
+    if subscription is None:
+        raise HTTPException(status_code=404, detail="Alert subscription was not found.")
+    return AlertMatchesResponse.model_validate(
+        {
+            "matches": store.matches_for_subscription(subscription_id),
+            "subscription": subscription,
+        }
+    )
+
+
+@router.get("/contributors/{contributor_id}/abuse-audit", response_model=ContributorAbuseAuditResponse)
+async def read_contributor_abuse_audit(
+    request: Request,
+    contributor_id: str = Path(min_length=8, max_length=120),
+) -> ContributorAbuseAuditResponse:
+    require_admin_auth(request)
+    return ContributorAbuseAuditResponse.model_validate(
+        {
+            "auditEvents": _store(request).contributor_abuse_audit(contributor_id),
+            "containsSensitiveRawData": False,
+        }
+    )
 
 
 @router.post("/contributors/{contributor_id}/moderation-notes", response_model=ContributorModerationNoteCreateResponse)
@@ -218,6 +262,51 @@ async def acknowledge_alert_notification_delivery(
     return response
 
 
+@router.get("/alert-notifications/{notification_id}/delivery-audit", response_model=AlertDeliveryAuditResponse)
+async def read_alert_notification_delivery_audit(
+    notification_id: str,
+    request: Request,
+) -> AlertDeliveryAuditResponse:
+    require_client_or_admin_auth(request)
+    audit_events = _store(request).delivery_audit(notification_id)
+    if not audit_events:
+        raise HTTPException(status_code=404, detail="Alert notification delivery audit was not found.")
+    return AlertDeliveryAuditResponse.model_validate(
+        {
+            "auditEvents": audit_events,
+            "notificationId": notification_id,
+        }
+    )
+
+
+@router.get("/alert-notifications/delivery-history", response_model=AlertDeliveryHistoryResponse)
+async def read_alert_notification_delivery_history(request: Request) -> AlertDeliveryHistoryResponse:
+    require_client_or_admin_auth(request)
+    audit_events = _store(request).delivery_history()
+    counts = {"failed": 0, "sent": 0, "suppressed": 0}
+    for event in audit_events:
+        counts[event.deliveryStatus] += 1
+    return AlertDeliveryHistoryResponse.model_validate(
+        {
+            "auditEvents": audit_events,
+            "containsSensitiveRawData": False,
+            "countsByStatus": counts,
+        }
+    )
+
+
+@router.get("/alert-notifications/adapter-sandbox/history", response_model=NotificationAdapterSandboxHistoryResponse)
+async def read_alert_notification_adapter_sandbox_history(request: Request) -> NotificationAdapterSandboxHistoryResponse:
+    require_admin_auth(request)
+    return _store(request).notification_adapter_sandbox_history()
+
+
+@router.get("/alert-notifications/provider-readiness", response_model=ProviderDeliveryReadinessResponse)
+async def read_alert_notification_provider_readiness(request: Request) -> ProviderDeliveryReadinessResponse:
+    require_admin_auth(request)
+    return _store(request).provider_delivery_readiness()
+
+
 @router.post("/alert-notifications/provider-outbox", response_model=ProviderOutboxResponse)
 async def create_alert_notification_provider_outbox(
     payload: ProviderOutboxCreate,
@@ -225,6 +314,12 @@ async def create_alert_notification_provider_outbox(
 ) -> ProviderOutboxResponse:
     require_admin_auth(request)
     return _store(request).create_provider_outbox(payload)
+
+
+@router.get("/alert-notifications/provider-outbox/history", response_model=ProviderOutboxHistoryResponse)
+async def read_alert_notification_provider_outbox_history(request: Request) -> ProviderOutboxHistoryResponse:
+    require_admin_auth(request)
+    return _store(request).provider_outbox_history()
 
 
 @router.get("/slot-signal/export", response_model=SlotSignalExportResponse)
