@@ -31,6 +31,95 @@ def _safe_suffix(value: str | None) -> str:
     return "".join(character if character.isalnum() or character in "._:-" else ":" for character in value)[:64]
 
 
+def _dispatch_one(
+    *,
+    delivery: ProviderOutboxDelivery,
+    payload: ProviderDeliveryDispatchCreate,
+    recorded_at: datetime,
+    settings: Settings,
+) -> ProviderDeliveryDispatchResult:
+    if not payload.explicitConsent:
+        return _result(
+            channel=delivery.channel,
+            delivery=delivery,
+            external_network_call_attempted=False,
+            payload=payload,
+            provider_failure_code=None,
+            provider_message_id=None,
+            reason="consent_missing",
+            recorded_at=recorded_at,
+            settings=settings,
+            status="skipped",
+        )
+    if payload.dryRun or settings.provider_delivery_mode == "dry_run":
+        return _result(
+            channel=delivery.channel,
+            delivery=delivery,
+            external_network_call_attempted=False,
+            payload=payload,
+            provider_failure_code=None,
+            provider_message_id=f"dry-run:{_safe_suffix(delivery.outboxDeliveryId)}",
+            reason="dry_run_only",
+            recorded_at=recorded_at,
+            settings=settings,
+            status="dry_run_recorded",
+        )
+    if settings.provider_delivery_mode != "live":
+        return _result(
+            channel=delivery.channel,
+            delivery=delivery,
+            external_network_call_attempted=False,
+            payload=payload,
+            provider_failure_code=None,
+            provider_message_id=None,
+            reason="provider_mode_disabled",
+            recorded_at=recorded_at,
+            settings=settings,
+            status="blocked_not_configured",
+        )
+    if not settings.provider_channel_configured(delivery.channel) or delivery.payload is None:
+        return _result(
+            channel=delivery.channel,
+            delivery=delivery,
+            external_network_call_attempted=False,
+            payload=payload,
+            provider_failure_code=None,
+            provider_message_id=None,
+            reason="provider_channel_not_configured",
+            recorded_at=recorded_at,
+            settings=settings,
+            status="blocked_not_configured",
+        )
+
+    try:
+        provider_message_id = _send_live(delivery, settings)
+    except Exception as error:
+        return _result(
+            channel=delivery.channel,
+            delivery=delivery,
+            external_network_call_attempted=True,
+            payload=payload,
+            provider_failure_code=_provider_failure_code(error),
+            provider_message_id=None,
+            reason="provider_send_failed",
+            recorded_at=recorded_at,
+            settings=settings,
+            status="failed",
+        )
+    return _result(
+        channel=delivery.channel,
+        delivery=delivery,
+        external_network_call_attempted=True,
+        payload=payload,
+        provider_failure_code=None,
+        provider_message_id=provider_message_id,
+        reason="provider_send_succeeded",
+        recorded_at=recorded_at,
+        settings=settings,
+        status="sent",
+    )
+
+
 def _result(
     *,
     channel: str,
@@ -116,6 +205,16 @@ def _provider_failure_code(error: Exception) -> str:
     return "provider_exception"
 
 
+def _send_live(delivery: ProviderOutboxDelivery, settings: Settings) -> str:
+    if delivery.channel == "email":
+        return _send_email(delivery, settings)
+    if delivery.channel == "telegram":
+        return _send_telegram(delivery, settings)
+    if delivery.channel == "slack":
+        return _send_slack(delivery, settings)
+    raise ValueError(f"Unsupported provider channel: {delivery.channel}")
+
+
 def _send_email(delivery: ProviderOutboxDelivery, settings: Settings) -> str:
     message = EmailMessage()
     message["From"] = settings.email_from or ""
@@ -143,3 +242,27 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None
     return json.loads(raw or "{}")
 
 
+def _send_telegram(delivery: ProviderOutboxDelivery, settings: Settings) -> str:
+    response = _post_json(
+        f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
+        {
+            "chat_id": settings.telegram_chat_id,
+            "disable_web_page_preview": True,
+            "text": _safe_provider_text(delivery),
+        },
+    )
+    return f"telegram:{_safe_suffix(str(response.get('result', {}).get('message_id', delivery.outboxDeliveryId)))}"
+
+
+def _send_slack(delivery: ProviderOutboxDelivery, settings: Settings) -> str:
+    response = _post_json(
+        "https://slack.com/api/chat.postMessage",
+        {
+            "channel": settings.slack_channel_id,
+            "text": _safe_provider_text(delivery),
+            "unfurl_links": False,
+            "unfurl_media": False,
+        },
+        headers={"Authorization": f"Bearer {settings.slack_bot_token}"},
+    )
+    return f"slack:{_safe_suffix(str(response.get('ts', delivery.outboxDeliveryId)))}"
