@@ -31,6 +31,82 @@ def _safe_suffix(value: str | None) -> str:
     return "".join(character if character.isalnum() or character in "._:-" else ":" for character in value)[:64]
 
 
+def provider_delivery_readiness_v2(settings: Settings, now: datetime | None = None) -> ProviderDeliveryV2ReadinessResponse:
+    checked_at = now or _now()
+    channels = ["email", "telegram", "slack"]
+    configured = [channel for channel in channels if settings.provider_channel_configured(channel)]
+    missing = [channel for channel in channels if channel not in configured]
+    return ProviderDeliveryV2ReadinessResponse.model_validate(
+        {
+            "auditLogEnabled": True,
+            "checkedAt": checked_at,
+            "configuredChannels": configured,
+            "containsSensitiveRawData": False,
+            "externalNetworkCallAttempted": False,
+            "liveDeliveryEnabled": settings.provider_delivery_mode == "live",
+            "missingChannels": missing,
+            "providerDeliveryMode": settings.provider_delivery_mode,
+            "requiresExplicitConsent": True,
+            "storesProviderRecipients": False,
+            "unsubscribeRequired": True,
+        }
+    )
+
+
+def dispatch_provider_deliveries(
+    *,
+    outbox: list[ProviderOutboxDelivery],
+    payload: ProviderDeliveryDispatchCreate,
+    settings: Settings,
+    now: datetime | None = None,
+) -> ProviderDeliveryDispatchResponse:
+    recorded_at = payload.recordedAt or now or _now()
+    delivery_filter = set(payload.outboxDeliveryIds or [])
+    eligible_outbox = [
+        delivery
+        for delivery in outbox
+        if delivery.channel in payload.channels and (not delivery_filter or delivery.outboxDeliveryId in delivery_filter)
+    ]
+    if delivery_filter:
+        missing_ids = sorted(delivery_filter - {delivery.outboxDeliveryId for delivery in eligible_outbox})
+    else:
+        missing_ids = []
+
+    results: list[ProviderDeliveryDispatchResult] = []
+    for delivery in eligible_outbox:
+        results.append(_dispatch_one(delivery=delivery, payload=payload, recorded_at=recorded_at, settings=settings))
+    for missing_id in missing_ids:
+        results.append(
+            _result(
+                channel=payload.channels[0],
+                delivery=None,
+                external_network_call_attempted=False,
+                payload=payload,
+                provider_failure_code=None,
+                provider_message_id=None,
+                reason="outbox_not_found",
+                recorded_at=recorded_at,
+                settings=settings,
+                status="skipped",
+            )
+        )
+
+    audit_events = [result.auditEvent for result in results]
+    return ProviderDeliveryDispatchResponse.model_validate(
+        {
+            "auditEvents": audit_events,
+            "containsSensitiveRawData": False,
+            "deliveryResults": results,
+            "dryRun": payload.dryRun,
+            "externalNetworkCallAttempted": any(result.externalNetworkCallAttempted for result in results),
+            "liveDeliveryEnabled": settings.provider_delivery_mode == "live",
+            "providerDeliveryMode": settings.provider_delivery_mode,
+            "slotAlertsDelivered": any(result.status == "sent" for result in results),
+            "storesProviderRecipients": False,
+        }
+    )
+
+
 def _dispatch_one(
     *,
     delivery: ProviderOutboxDelivery,
