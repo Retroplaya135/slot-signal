@@ -130,3 +130,67 @@ def _audit_event(*, idempotency_key: str, now: datetime, notification: dict, tra
     return AuditEvent.model_validate(payload).model_dump(mode="json")
 
 
+def create_fixture_notification_dispatch(
+    *,
+    idempotency_key: str,
+    queue_state: dict,
+    trace_id: str,
+    preferences: dict | None = None,
+    now: datetime | None = None,
+) -> dict:
+    attempted_at = now or _now()
+    prefs = preferences or create_notification_preferences(now=attempted_at)
+    notification = _notification_event(now=attempted_at, queue_state=queue_state, trace_id=trace_id)
+    safe_message = _safe_message(queue_state)
+    deliveries = [
+        _delivery(channel="browser", enabled=bool(prefs["channels"]["browser"]), notification=notification, now=attempted_at, safe_message=safe_message),
+        _delivery(channel="telegram", enabled=bool(prefs["channels"]["telegram"]), notification=notification, now=attempted_at, safe_message=safe_message),
+        _delivery(channel="email", enabled=bool(prefs["channels"]["email"]), notification=notification, now=attempted_at, safe_message=safe_message),
+    ]
+    return {
+        "auditEvent": _audit_event(idempotency_key=idempotency_key, now=attempted_at, notification=notification, trace_id=trace_id),
+        "deliveries": deliveries,
+        "notification": notification,
+    }
+
+
+def create_telegram_command_audit(
+    *,
+    command: NotificationCommand,
+    idempotency_key: str,
+    trace_id: str,
+    now: datetime | None = None,
+) -> dict:
+    occurred_at = now or _now()
+    allowed = command == "status"
+    reason = "status_only"
+    if command == "open_browser":
+        reason = "browser_only_action"
+    elif command == "confirm_booking":
+        reason = "appointment_action_blocked"
+
+    audit = AuditEvent.model_validate(
+        {
+            "action": "check_requested" if allowed else "policy_rejected",
+            "actorType": "notification",
+            "auditId": f"audit:notification:telegram:{_safe_suffix(command)}:{_safe_suffix(idempotency_key)}",
+            "containsSensitiveRawData": False,
+            "idempotencyKey": idempotency_key,
+            "occurredAt": occurred_at,
+            "reason": "manual_check" if allowed else "policy_blocked",
+            "redactionLevel": "no_secrets",
+            "result": "accepted" if allowed else "rejected",
+            "safeSummary": "Telegram status command audited as read-only."
+            if allowed
+            else "Telegram command rejected because browser or appointment-changing authority stays in the browser.",
+            "source": "api",
+            "traceId": trace_id,
+        }
+    ).model_dump(mode="json")
+
+    return {
+        "allowed": allowed,
+        "auditEvent": audit,
+        "command": command,
+        "reason": reason,
+    }
